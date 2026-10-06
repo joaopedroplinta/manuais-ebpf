@@ -1,13 +1,108 @@
-\chapter{Instrumentação com eBPF}
+\chapter{Instrumentação com eBPF}\label{cap:instrumentacao}
+
+Instrumentar é escolher em que ponto do sistema o programa eBPF vai observar. Essa escolha define o que se enxerga, a estabilidade do código ao longo das versões do kernel e o custo da coleta. Este capítulo apresenta os seis mecanismos mais usados em observabilidade: \textit{kprobes}, \textit{kretprobes}, \textit{tracepoints}, \textit{uprobes}, USDT e \textit{perf events}. O Quadro~\ref{quad:instrumentacao} os compara.
+
+\begin{quadro}[htb]
+  \caption{Mecanismos de instrumentação do eBPF}
+  \label{quad:instrumentacao}
+  \small
+  \begin{tabular}{@{}p{2.2cm}p{3.7cm}p{3.7cm}p{4.4cm}@{}}
+    \toprule
+    \textbf{Mecanismo} & \textbf{Onde observa} & \textbf{Estabilidade} & \textbf{Quando usar} \\
+    \midrule
+    kprobe & entrada de qualquer função do kernel & baixa: nomes e argumentos mudam entre versões & não há \textit{tracepoint} para o que se quer \\
+    kretprobe & saída de uma função do kernel & baixa & medir retorno e latência de funções \\
+    tracepoint & pontos fixos definidos pelo kernel & alta & primeira escolha no kernel \\
+    uprobe & função de um binário em espaço do usuário & depende do binário & observar aplicações sem alterá-las \\
+    USDT & pontos definidos pelo desenvolvedor da aplicação & alta, se o programa os mantiver & aplicações que já trazem sondas \\
+    perf event & eventos de hardware e software, por amostragem & alta & perfil de CPU \\
+    \bottomrule
+  \end{tabular}
+  \fonte{Elaborado pelos autores, a partir de \cite{gregg2019,linuxkernel2024}.}
+\end{quadro}
 
 \section{Kprobes}
 
+Um \textit{kprobe} permite anexar um programa à entrada de praticamente qualquer função do kernel, sem que o kernel precise ter sido preparado para isso \cite{linuxkernel2024}. É o mecanismo mais flexível e o usado no coletor de bytes por porta do capítulo \ref{cap:ferramentas}, anexado a \texttt{tcp\_sendmsg}. Os argumentos da função ficam disponíveis ao programa, e no \texttt{bpftrace} aparecem como \texttt{arg0}, \texttt{arg1} e assim por diante.
+
+A flexibilidade tem um preço: as funções internas do kernel não são uma interface estável. Uma função pode mudar de nome, de argumentos ou deixar de existir em uma versão nova, e o programa passa a falhar ou, pior, a ler dados errados. Por isso o \textit{kprobe} deve ser a escolha quando não existe um \textit{tracepoint} equivalente. Para ver quais funções podem ser instrumentadas:
+
+\begin{lstlisting}
+sudo bpftrace -l 'kprobe:tcp_*'
+sudo bpftrace -e 'kprobe:tcp_sendmsg { @bytes[comm] = sum(arg2); }'
+\end{lstlisting}
+
 \section{Kretprobes}
+
+O \textit{kretprobe} é o par do \textit{kprobe}: dispara quando a função retorna, e dá acesso ao valor de retorno. O uso típico é medir a duração de uma função, combinando os dois. O \textit{kprobe} guarda o instante de entrada em um mapa, indexado pela \textit{thread}, e o \textit{kretprobe} calcula a diferença:
+
+\begin{lstlisting}
+sudo bpftrace -e '
+kprobe:vfs_read { @inicio[tid] = nsecs; }
+kretprobe:vfs_read /@inicio[tid]/ {
+    @us = hist((nsecs - @inicio[tid]) / 1000);
+    delete(@inicio[tid]);
+}'
+\end{lstlisting}
+
+O valor de retorno também é útil por si só. Em \texttt{vfs\_read}, ele é o número de bytes lidos, e \texttt{hist(retval)} mostra a distribuição dos tamanhos de leitura. O \textit{kretprobe} costuma custar mais do que o \textit{kprobe}, porque o kernel precisa interceptar o retorno da função. Em kernels recentes (5.5 ou superior), os programas do tipo \texttt{fentry} e \texttt{fexit} fazem o mesmo com menos custo, e são preferíveis quando disponíveis.
 
 \section{Tracepoints}
 
-\section{Uprobes}
+\textit{Tracepoints} são pontos de instrumentação definidos de forma explícita pelos desenvolvedores do kernel, em locais estratégicos como chamadas de sistema, escalonador e camada de blocos. Por serem mantidos de propósito, mudam muito menos entre versões do que as funções internas, e já trazem os argumentos descritos \cite{linuxkernel2024}. Por isso são a primeira opção quando existem.
+
+A lista de \textit{tracepoints} está em \texttt{/sys/kernel/tracing/events}, e o \texttt{bpftrace} mostra os campos de cada um:
+
+\begin{lstlisting}
+sudo bpftrace -l 'tracepoint:sched:*'
+sudo bpftrace -lv tracepoint:block:block_rq_issue
+sudo bpftrace -e 'tracepoint:sched:sched_process_exec { printf("%s\n", str(args->filename)); }'
+\end{lstlisting}
+
+Os exemplos do capítulo \ref{cap:monitoramento} sobre chamadas de sistema (\texttt{syscalls:sys\_enter\_openat}) e disco (\texttt{block:block\_rq\_issue}) usam \textit{tracepoints}. A limitação é a cobertura: só existe um \textit{tracepoint} onde alguém decidiu colocar um.
+
+\section{Uprobes}\label{sec:uprobes}
+
+O \textit{uprobe} é o equivalente do \textit{kprobe} para o espaço do usuário: anexa o programa a uma função de um binário ou biblioteca, identificada pelo caminho do arquivo e pelo nome do símbolo. Permite observar uma aplicação sem alterá-la nem reiniciá-la \cite{gregg2019}. Um exemplo clássico é o \textit{shell} \texttt{bash}, cuja função \texttt{readline} devolve cada linha digitada:
+
+\begin{lstlisting}
+sudo bpftrace -e 'uretprobe:/bin/bash:readline { printf("%s\n", str(retval)); }'
+\end{lstlisting}
+
+A dependência do binário é a limitação principal. O \textit{uprobe} precisa de um símbolo visível: binários sem a tabela de símbolos (\textit{stripped}) ou com nomes alterados por otimização podem não ser instrumentáveis, e uma atualização do programa pode renomear a função. Para listar os símbolos de um binário, use \texttt{bpftrace -l 'uprobe:/caminho/do/binario:*'}.
 
 \section{USDT}
 
+USDT (\textit{User Statically-Defined Tracing}) são sondas que o próprio desenvolvedor da aplicação inseriu no código, de forma estática, em pontos significativos: início de uma consulta, nova conexão, coleta de lixo. Como são mantidas pelo projeto, têm a estabilidade dos \textit{tracepoints} e o significado de eventos de negócio, algo que um \textit{uprobe} em funções internas não oferece.
+
+Servidores de banco de dados e ambientes de execução, como PostgreSQL, MySQL, a JVM e o Python, podem trazer sondas USDT, dependendo de como foram compilados. Um exemplo que está à mão em muitas distribuições é o interpretador Python. Para ver as sondas de um binário, use a opção \texttt{-l} do \texttt{bpftrace}:
+
+\begin{lstlisting}
+sudo bpftrace -l 'usdt:/usr/bin/python3.14:*'
+\end{lstlisting}
+
+No Ubuntu 26.04, o \texttt{python3.14} expõe cinco sondas: \texttt{python:audit}, \texttt{python:gc\_\_start}, \texttt{python:gc\_\_done}, \texttt{python:import\_\_find\_\_load\_\_start} e \texttt{python:import\_\_find\_\_load\_\_done}. A lista depende da compilação: a sonda \texttt{python:function\_\_entry}, que aparece na documentação do Python, não existe nesse pacote, e o \texttt{bpftrace} acusa \texttt{No matches for usdt}. Por isso é sempre necessário listar as sondas antes de escrever o programa.
+
+A sonda \texttt{import\_\_find\_\_load\_\_start} recebe o nome do módulo no primeiro argumento. O comando a seguir imprime cada módulo importado pelos programas Python do sistema, o que ajuda, por exemplo, a descobrir por que um \textit{script} demora a iniciar:
+
+\begin{lstlisting}
+sudo bpftrace -e 'usdt:/usr/bin/python3.14:python:import__find__load__start {
+    printf("%s\n", str(arg0)); }'
+\end{lstlisting}
+
+Em um teste, a saída listou os módulos na ordem em que o interpretador os carregou (\texttt{site}, \texttt{os}, \texttt{encodings} e outros). No ambiente de teste (Ubuntu 26.04, kernel 7.0 e \texttt{bpftrace} 0.25.0), o \texttt{bpftrace} imprimiu, antes da saída, avisos de compilação vindos do \texttt{vmlinux.h} (\texttt{declaration does not declare anything}). São inofensivos, e a opção \texttt{--no-warnings} não os suprime. Além disso, um programa USDT de várias linhas, salvo em arquivo, fez o \texttt{bpftrace} abortar com \texttt{Assertion failed}, enquanto o mesmo programa escrito em uma única linha com \texttt{-e} funcionou. Nessa combinação de versões, prefira \textit{scripts} USDT de uma linha.
+
+Se o programa não traz sondas, a alternativa é o \textit{uprobe}, com a estabilidade menor descrita acima.
+
 \section{Perf Events}
+
+Os \textit{perf events} são a infraestrutura de contadores e amostragem do kernel, a mesma usada pelo \texttt{perf}. O eBPF pode anexar programas a eles para amostrar o que o sistema faz em intervalos regulares, em vez de reagir a cada evento. Isso torna o custo previsível, independente de quantos eventos ocorrem, e é o mecanismo por trás dos perfis de CPU e dos gráficos de chamas \cite{gregg2019}.
+
+O \texttt{bpftrace} expõe os \textit{perf events} de software e hardware. Contadores de hardware, como falhas de cache, dependem de suporte do processador e geralmente não estão disponíveis dentro de máquinas virtuais:
+
+\begin{lstlisting}
+sudo bpftrace -e 'profile:hz:99 { @[kstack] = count(); }'
+sudo bpftrace -e 'software:page-faults:1 { @[comm] = count(); }'
+\end{lstlisting}
+
+O primeiro comando amostra a pilha do kernel 99 vezes por segundo em cada CPU, o que é suficiente para identificar onde o tempo é gasto com custo baixo. O segundo conta as falhas de página por processo.

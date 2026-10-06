@@ -1,11 +1,128 @@
-\chapter{Coleta e Visualização de Dados}
+\chapter{Coleta e Visualização de Dados}\label{cap:coleta}
+
+Uma métrica coletada no kernel só ajuda quando alguém consegue vê-la ao longo do tempo. Este capítulo mostra como levar os dados do eBPF até o Prometheus, que os armazena, e ao Grafana, que os exibe em painéis. O caminho é: programa eBPF, mapa, \textit{exporter}, Prometheus e Grafana.
 
 \section{eBPF e Prometheus}
 
+O Prometheus segue o modelo de \textit{pull}: um servidor busca, em intervalos regulares, as métricas expostas em um \textit{endpoint} HTTP e as armazena como séries temporais \cite{prometheusdocs,turnbull2018}. Para um coletor eBPF, isso significa que algum processo precisa ler os mapas do kernel e expô-los nesse formato. Há três caminhos:
+
+\begin{itemize}
+  \item usar o \texttt{ebpf\_exporter}, que faz isso a partir de um arquivo de configuração (seção \ref{sec:ebpf-exporter});
+  \item escrever um \textit{exporter} próprio, em Python, que lê os mapas (seção \ref{sec:exportacao});
+  \item gravar as métricas em um arquivo de texto e deixar o \textit{textfile collector} do Node Exporter publicá-las, útil para coletas esporádicas.
+\end{itemize}
+
+Com um \textit{exporter} rodando na porta 9435, a configuração mínima do Prometheus para buscá-lo é:
+
+\begin{lstlisting}
+scrape_configs:
+  - job_name: ebpf
+    scrape_interval: 5s
+    static_configs:
+      - targets: ['localhost:9435']
+\end{lstlisting}
+
+Em um teste com o Prometheus 3.15.0 e o \texttt{ebpf\_exporter} 2.5.1, o alvo apareceu como \texttt{up} em \textit{Status > Targets} e as métricas ficaram disponíveis para consulta. O intervalo de coleta (\texttt{scrape\_interval}) define a resolução do que o Prometheus enxerga. A agregação no kernel continua contando cada evento, mas o Prometheus só vê o valor acumulado a cada intervalo. Para contadores, isso não causa perda: a diferença entre duas leituras é exatamente o que aconteceu no período. Para valores instantâneos, como uma latência, o ideal é que o programa eBPF já entregue um histograma.
+
 \section{eBPF e Grafana}
 
-\section{Exportação de métricas}
+O Grafana é uma ferramenta de visualização que consulta fontes de dados, entre elas o Prometheus, e as apresenta em painéis \cite{grafanadocs}. O uso básico é cadastrar o Prometheus como fonte de dados e criar painéis com consultas na linguagem PromQL.
+
+Os tipos de painel mais úteis para métricas do eBPF são o gráfico de séries temporais, para taxas, e o mapa de calor (\textit{heatmap}), para distribuições de latência. Duas consultas de exemplo, usando as métricas de exemplo do \texttt{ebpf\_exporter}:
+
+\begin{lstlisting}
+# taxa de temporizadores disparados no kernel por segundo
+rate(ebpf_exporter_timer_starts_total[1m])
+
+# latencia de disco no percentil 95
+histogram_quantile(0.95,
+  sum by (le) (rate(ebpf_exporter_bio_latency_seconds_bucket[5m])))
+\end{lstlisting}
+
+No teste com o Grafana 13.2.3, o Prometheus foi cadastrado como fonte de dados (URL \texttt{http://localhost:9090}), e as duas consultas acima retornaram resultados pela fonte de dados: a primeira trouxe 24 séries, e a segunda, uma latência no percentil 95 de cerca de 5,6 ms, medida depois de gravar 300 MB em disco com \texttt{dd}. A criação dos painéis em si (séries temporais e mapa de calor) não foi exercitada nesse teste.
+
+A função \texttt{rate} converte o contador acumulado em uma taxa por segundo. Já \texttt{histogram\_quantile} calcula percentis a partir dos \textit{buckets} do histograma, e é por isso que a latência de disco deve ser exportada como histograma, e não como média.
+
+\section{Exportação de métricas}\label{sec:exportacao}
+
+Ao transformar um mapa eBPF em métrica, a escolha do tipo segue o que o mapa guarda. Valores que só crescem, como bytes enviados, viram contadores. Valores que sobem e descem, como conexões abertas, viram \textit{gauges}. Distribuições, como latência, viram histogramas \cite{turnbull2018}. Algumas convenções evitam confusão: nomes de contadores terminam em \texttt{\_total}, e unidades de tempo são expressas em segundos.
+
+O cuidado mais importante é a cardinalidade dos rótulos. Cada combinação de valores de rótulo cria uma série temporal nova. Usar o PID ou o endereço IP do cliente como rótulo pode gerar milhares de séries e sobrecarregar o Prometheus. Prefira rótulos de poucos valores, como a porta de serviço, e agregue o resto.
+
+O exemplo a seguir é um \textit{exporter} em Python que lê o mapa \texttt{bytes\_por\_porta} do programa do capítulo \ref{cap:ferramentas}, já carregado no kernel, e o publica na porta 8000. A leitura usa o \texttt{bpftool}, que devolve o conteúdo do mapa em JSON, e a classe \texttt{Coletor} faz essa consulta a cada requisição do Prometheus:
+
+\begin{lstlisting}
+import json
+import subprocess
+import time
+
+from prometheus_client import start_http_server
+from prometheus_client.core import CounterMetricFamily, REGISTRY
+
+PORTAS = {80, 443, 8080}  # portas de servico de interesse
+
+
+def ler_mapa(nome):
+    saida = subprocess.run(["bpftool", "-j", "map", "dump", "name", nome],
+                           capture_output=True, text=True, check=True).stdout
+    return json.loads(saida)
+
+
+class Coletor:
+    def collect(self):
+        m = CounterMetricFamily("ebpf_tcp_bytes_enviados",
+                                "Bytes enviados por porta de destino",
+                                labels=["porta"])
+        for entrada in ler_mapa("bytes_por_porta"):
+            f = entrada["formatted"]
+            if f["key"] in PORTAS:
+                m.add_metric([str(f["key"])], f["value"])
+        yield m
+
+
+REGISTRY.register(Coletor())
+start_http_server(8000)
+while True:
+    time.sleep(1)
+\end{lstlisting}
+
+O filtro \texttt{PORTAS} não é um detalhe. No teste deste manual, sem o filtro, o \textit{exporter} publicou 21 séries depois de apenas cinco requisições, quase todas de portas efêmeras de clientes (como 58674 ou 35098), cada uma com poucos bytes. Em um servidor real, esse número cresce a cada nova conexão. Com o filtro, o mesmo teste publicou apenas três séries, uma para cada porta listada. Para o servidor de teste na porta 8080, a série tem este formato:
+
+\begin{lstlisting}
+# HELP ebpf_tcp_bytes_enviados_total Bytes enviados por porta de destino
+# TYPE ebpf_tcp_bytes_enviados_total counter
+ebpf_tcp_bytes_enviados_total{porta="8080"} 390.0
+\end{lstlisting}
+
+Por não depender de compilação em tempo de execução, esse \textit{exporter} funciona em qualquer kernel que carregue o programa \texttt{libbpf}. O pacote \texttt{python3-prometheus-client} traz a biblioteca. O \textit{exporter} precisa rodar como \texttt{root}, porque o \texttt{bpftool} exige esse privilégio para ler mapas.
+
+Esse padrão, em que o mapa acumula no kernel e o \textit{exporter} só o lê sob demanda, evita o custo do \textit{polling} descrito no capítulo \ref{cap:introducao}: o espaço do usuário é acionado uma vez por intervalo de coleta, e não a cada evento.
 
 \section{Coleta de eventos}
 
+Métricas resumem eventos. Quando é preciso o evento em si, como cada execução de um processo ou cada conexão recusada, o programa eBPF envia o registro ao espaço do usuário em vez de atualizar um contador. O mecanismo para isso é o \textit{ring buffer}, uma fila compartilhada entre o kernel e o espaço do usuário disponível a partir do kernel 5.8, que substitui o antigo \textit{perf buffer} com menos cópias e ordenação preservada \cite{linuxkernel2024}.
+
+O fluxo é o mesmo das métricas, com uma diferença no destino. Em vez do Prometheus, que guarda números, os eventos costumam ir para um sistema de \textit{logs} ou de análise, normalmente em formato JSON, para serem pesquisados depois. O \texttt{ebpf\_exporter} também permite enviar \textit{traces} no formato OpenTelemetry \cite{ebpfexporter}. A regra do capítulo \ref{cap:fundamentos}, de agregar no kernel quando possível, continua valendo: registrar cada evento custa mais do que contá-lo, e deve ser reservado a eventos raros ou de alto valor, como falhas e conexões suspeitas.
+
 \section{Dashboards de observabilidade}
+
+Um painel útil responde a perguntas, não exibe todas as métricas disponíveis. Um bom ponto de partida é organizá-lo pelos sinais do capítulo \ref{cap:fundamentos}: latência, tráfego, erros e saturação \cite{beyer2016}. Para o monitoramento de um serviço com eBPF, uma organização possível é:
+
+\begin{itemize}
+  \item \textbf{tráfego}: bytes enviados por porta de serviço e conexões por segundo (\texttt{tcpconnect});
+  \item \textbf{latência}: percentis de latência de disco e de resposta do serviço, a partir de histogramas;
+  \item \textbf{erros}: retransmissões TCP e processos encerrados por falta de memória;
+  \item \textbf{saturação}: latência da fila de execução da CPU e profundidade da fila de disco.
+\end{itemize}
+
+A Figura~\ref{fig:painel-grafana} mostra um painel montado com as métricas dos capítulos anteriores. O gráfico de tráfego usa o programa da seção \ref{sec:libbpf} e o \textit{exporter} em Python da seção \ref{sec:exportacao}, e os demais usam o \texttt{ebpf\_exporter}: a latência de disco (percentis 50 e 95), o mapa de calor da distribuição dessa latência e os cinco temporizadores do kernel mais frequentes. O painel foi montado a partir de quatro consultas PromQL, uma por quadro, e atualizado a cada 5 segundos.
+
+\begin{figure}[htb]
+  \caption{Painel do Grafana com métricas coletadas por eBPF}
+  \label{fig:painel-grafana}
+  \centering
+  \includegraphics[width=\textwidth]{painel-grafana.png}
+  \fonte{Elaborado pelos autores.}
+\end{figure}
+
+Alguns cuidados ajudam a manter o painel confiável. Use intervalos de \texttt{rate} de pelo menos quatro vezes o intervalo de coleta, para que cada janela contenha várias amostras. Prefira percentis a médias para latência. Acompanhe o próprio coletor: o consumo de CPU e de memória do \textit{exporter} deve estar no painel, porque o custo da observação é parte do que se quer controlar. E defina alertas só para sintomas que exijam ação, deixando o restante apenas para investigação.
