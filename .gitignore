@@ -13,3 +13,7 @@
 *.synctex.gz
 output.pdf
 main-manual-*.pdf
+
+# Instruções locais do Claude Code (não vão para o GitHub/Overleaf)
+CLAUDE.md
+.claude/
