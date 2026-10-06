@@ -8,7 +8,8 @@
 \usepackage{listings}
 
 \graphicspath{{imagens/}}
-\lstset{basicstyle=\ttfamily\small,breaklines=true,frame=single,showstringspaces=false}
+\lstset{basicstyle=\ttfamily\footnotesize,columns=fixed,keepspaces=true,upquote=true,breaklines=true,postbreak=\mbox{$\hookrightarrow$\space},frame=single,showstringspaces=false}
+\newcolumntype{P}[1]{>{\raggedright\arraybackslash}p{#1}}
 
 % ---- Metadados do trabalho ----
 \curso{Bacharelado em Ciência da Computação}

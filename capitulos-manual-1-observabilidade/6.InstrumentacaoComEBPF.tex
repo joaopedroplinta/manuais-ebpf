@@ -6,7 +6,7 @@ Instrumentar é escolher em que ponto do sistema o programa eBPF vai observar. E
   \caption{Mecanismos de instrumentação do eBPF}
   \label{quad:instrumentacao}
   \small
-  \begin{tabular}{@{}p{2.2cm}p{3.7cm}p{3.7cm}p{4.4cm}@{}}
+  \begin{tabular}{@{}P{2.2cm}P{3.7cm}P{3.7cm}P{4.4cm}@{}}
     \toprule
     \textbf{Mecanismo} & \textbf{Onde observa} & \textbf{Estabilidade} & \textbf{Quando usar} \\
     \midrule
@@ -18,7 +18,7 @@ Instrumentar é escolher em que ponto do sistema o programa eBPF vai observar. E
     perf event & eventos de hardware e software, por amostragem & alta & perfil de CPU \\
     \bottomrule
   \end{tabular}
-  \fonte{Elaborado pelos autores, a partir de \cite{gregg2019,linuxkernel2024}.}
+  \fonte{Elaborado pelos autores, a partir de \citeonline{gregg2019,linuxkernel2024}.}
 \end{quadro}
 
 \section{Kprobes}
@@ -56,7 +56,8 @@ A lista de \textit{tracepoints} está em \texttt{/sys/kernel/tracing/events}, e 
 \begin{lstlisting}
 sudo bpftrace -l 'tracepoint:sched:*'
 sudo bpftrace -lv tracepoint:block:block_rq_issue
-sudo bpftrace -e 'tracepoint:sched:sched_process_exec { printf("%s\n", str(args->filename)); }'
+sudo bpftrace -e 'tracepoint:sched:sched_process_exec {
+    printf("%s\n", str(args->filename)); }'
 \end{lstlisting}
 
 Os exemplos do capítulo \ref{cap:monitoramento} sobre chamadas de sistema (\texttt{syscalls:sys\_enter\_openat}) e disco (\texttt{block:block\_rq\_issue}) usam \textit{tracepoints}. A limitação é a cobertura: só existe um \textit{tracepoint} onde alguém decidiu colocar um.
@@ -81,7 +82,15 @@ Servidores de banco de dados e ambientes de execução, como PostgreSQL, MySQL, 
 sudo bpftrace -l 'usdt:/usr/bin/python3.14:*'
 \end{lstlisting}
 
-No Ubuntu 26.04, o \texttt{python3.14} expõe cinco sondas: \texttt{python:audit}, \texttt{python:gc\_\_start}, \texttt{python:gc\_\_done}, \texttt{python:import\_\_find\_\_load\_\_start} e \texttt{python:import\_\_find\_\_load\_\_done}. A lista depende da compilação: a sonda \texttt{python:function\_\_entry}, que aparece na documentação do Python, não existe nesse pacote, e o \texttt{bpftrace} acusa \texttt{No matches for usdt}. Por isso é sempre necessário listar as sondas antes de escrever o programa.
+No Ubuntu 26.04, o \texttt{python3.14} expõe cinco sondas:
+
+\begin{itemize}
+  \item \texttt{python:audit};
+  \item \texttt{python:gc\_\_start} e \texttt{python:gc\_\_done}, no início e no fim da coleta de lixo;
+  \item \texttt{python:import\_\_find\_\_load\_\_start} e \texttt{python:import\_\_find\_\_load\_\_done}, na importação de módulos.
+\end{itemize}
+
+A lista depende da compilação: a sonda \texttt{python:function\_\_entry}, que aparece na documentação do Python, não existe nesse pacote, e o \texttt{bpftrace} acusa \texttt{No matches for usdt}. Por isso é sempre necessário listar as sondas antes de escrever o programa.
 
 A sonda \texttt{import\_\_find\_\_load\_\_start} recebe o nome do módulo no primeiro argumento. O comando a seguir imprime cada módulo importado pelos programas Python do sistema, o que ajuda, por exemplo, a descobrir por que um \textit{script} demora a iniciar:
 
