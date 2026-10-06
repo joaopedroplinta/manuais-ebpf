@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Sobe ebpf_exporter + programa libbpf + exporter Python + Prometheus + Grafana com um painel pronto, para tirar print.
 # Antes, testa de novo o USDT do python3.14 com --no-warnings.
-# Rodar com: sudo bash 06-painel-grafana.sh   (precisa dos arquivos das rodadas 3 e 4 em /tmp)
+# Rodar com: sudo bash testes/06-painel-grafana.sh   (precisa dos arquivos das rodadas 3 e 4 em /tmp)
 [ "$(id -u)" -eq 0 ] || { echo "rode com sudo"; exit 1; }
 W=/tmp/ebpf-painel; rm -rf $W; mkdir -p $W; cd $W
 T3=/tmp/ebpf-teste; T4=/tmp/ebpf-teste4
