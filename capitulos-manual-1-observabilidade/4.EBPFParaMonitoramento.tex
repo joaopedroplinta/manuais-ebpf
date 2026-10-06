@@ -32,7 +32,7 @@ sudo bpftrace -e 'tracepoint:raw_syscalls:sys_enter { @[comm] = count(); }'
 Na CPU, o método USE pergunta quanto tempo ela está ocupada (utilização) e quanto trabalho espera para rodar (saturação). A utilização está em ferramentas conhecidas, como o \texttt{top}. A saturação é o que o eBPF mostra bem: o \texttt{runqlat} mede quanto tempo cada tarefa espera na fila de execução até receber a CPU, e apresenta um histograma. O \texttt{cpudist} mostra por quanto tempo as tarefas rodam a cada vez que recebem a CPU:
 
 \begin{lstlisting}
-sudo runqlat-libbpf 1 5        # histograma da fila de execucao, 5 amostras de 1 s
+sudo runqlat-libbpf 1 5        # histograma da fila de execucao
 sudo cpudist-libbpf 1 5        # quanto tempo as tarefas rodam a cada vez
 \end{lstlisting}
 
@@ -69,7 +69,8 @@ O mesmo histograma pode ser montado com \texttt{bpftrace}. O \textit{script} gua
 tracepoint:block:block_rq_issue {
     @inicio[args->dev, args->sector] = nsecs;
 }
-tracepoint:block:block_rq_complete /@inicio[args->dev, args->sector]/ {
+tracepoint:block:block_rq_complete
+/@inicio[args->dev, args->sector]/ {
     @us = hist((nsecs - @inicio[args->dev, args->sector]) / 1000);
     delete(@inicio[args->dev, args->sector]);
 }
@@ -83,7 +84,7 @@ Para aplicações, o eBPF observa o que cruza o kernel, como conexões de rede, 
 
 \begin{lstlisting}
 sudo tcpconnect-libbpf          # conexoes abertas, por processo
-sudo tcplife-libbpf -L 8080     # duracao e bytes de cada conexao na porta local 8080
+sudo tcplife-libbpf -L 8080     # duracao e bytes por conexao, porta 8080
 \end{lstlisting}
 
 O \texttt{tcplife} responde perguntas como quais clientes mantêm conexões longas com o serviço e quantos bytes cada uma trafegou. Para gerar tráfego de teste, rode \texttt{python3 -m http.server 8080} em outro terminal e acesse a porta com o \texttt{curl}. As retransmissões TCP, um indício melhor de degradação da rede do que a média de latência, podem ser observadas com um \textit{tracepoint}:

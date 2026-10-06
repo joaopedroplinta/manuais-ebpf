@@ -57,7 +57,7 @@ sudo apt install -y clang llvm libbpf-dev libelf-dev \
     bpftrace libbpf-tools python3 python3-pip
 \end{lstlisting}
 
-O pacote \texttt{libbpf-tools} instala as ferramentas prontas do capítulo \ref{cap:monitoramento}, com o sufixo \texttt{-libbpf} (por exemplo, \texttt{execsnoop-libbpf}). O BCC, instalado pelo pacote \texttt{bpfcc-tools} e com o sufixo \texttt{-bpfcc}, é opcional e pode falhar em kernels muito recentes, como descrito em \textit{Problemas comuns}.
+O pacote \texttt{libbpf-tools} instala as ferramentas prontas do capítulo \ref{cap:monitoramento}, com o sufixo \texttt{-libbpf} (por exemplo, \texttt{execsnoop-libbpf}). O BCC, instalado pelo pacote \texttt{bpfcc-tools} e com o sufixo \texttt{-bpfcc}, é opcional e pode falhar em kernels muito recentes, como descrito na seção~\ref{sec:problemas}.
 
 O pacote \texttt{linux-tools} traz o \texttt{bpftool}. Com ele, gere o cabeçalho com todos os tipos do kernel em uso, que os programas em C incluirão no lugar dos cabeçalhos tradicionais:
 
@@ -85,7 +85,7 @@ Ao encerrar, o \texttt{bpftrace} imprime o mapa, ordenado da menor para a maior 
 
 Os nomes como \texttt{blocking-588} e \texttt{pool-870} são nomes de \textit{threads}, que o campo \texttt{comm} também registra. Se a saída listar nomes de processos com suas contagens, o ambiente está pronto.
 
-\subsection*{Problemas comuns}
+\section{Problemas comuns}\label{sec:problemas}
 
 \begin{itemize}
   \item \texttt{Operation not permitted}: o comando precisa de \texttt{root}. Repita com \texttt{sudo}. Sem ele, até o \texttt{bpftool prog show} falha. O parâmetro \texttt{kernel.unprivileged\_bpf\_disabled}, que pode ser consultado com \texttt{sysctl}, define se usuários comuns podem carregar programas, e em muitas distribuições vem desabilitado.

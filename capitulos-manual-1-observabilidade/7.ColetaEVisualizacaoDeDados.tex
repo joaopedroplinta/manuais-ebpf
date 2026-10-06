@@ -41,7 +41,7 @@ histogram_quantile(0.95,
 
 No teste com o Grafana 13.2.3, o Prometheus foi cadastrado como fonte de dados (URL \texttt{http://localhost:9090}), e as duas consultas acima retornaram resultados pela fonte de dados: a primeira trouxe 24 séries, e a segunda, uma latência no percentil 95 de cerca de 5,6 ms, medida depois de gravar 300 MB em disco com \texttt{dd}. A criação dos painéis em si (séries temporais e mapa de calor) não foi exercitada nesse teste.
 
-A função \texttt{rate} converte o contador acumulado em uma taxa por segundo. Já \texttt{histogram\_quantile} calcula percentis a partir dos \textit{buckets} do histograma, e é por isso que a latência de disco deve ser exportada como histograma, e não como média.
+A função \texttt{rate} converte o contador acumulado em uma taxa por segundo. Já \texttt{histogram\_\allowbreak quantile} calcula percentis a partir dos \textit{buckets} do histograma, e é por isso que a latência de disco deve ser exportada como histograma, e não como média.
 
 \section{Exportação de métricas}\label{sec:exportacao}
 
