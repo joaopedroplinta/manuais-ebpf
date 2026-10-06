@@ -1,9 +1,157 @@
 \chapter{Ferramentas de Observabilidade}\label{cap:ferramentas}
 
+Há três formas de usar o eBPF para observabilidade, em ordem crescente de esforço: rodar ferramentas prontas, escrever \textit{scripts} curtos e escrever um programa próprio. Este capítulo apresenta o BCC, o \texttt{bpftrace} e a \texttt{libbpf}, que cobrem esses três níveis, e os \textit{exporters}, que levam o resultado ao Prometheus. O Quadro~\ref{quad:ferramentas} resume quando usar cada um.
+
+\begin{quadro}[htb]
+  \caption{Comparação entre as ferramentas de eBPF}
+  \label{quad:ferramentas}
+  \small
+  \begin{tabular}{@{}p{2.3cm}p{3.4cm}p{4.2cm}p{4.3cm}@{}}
+    \toprule
+    \textbf{Ferramenta} & \textbf{Linguagem} & \textbf{Melhor uso} & \textbf{Ponto de atenção} \\
+    \midrule
+    BCC & Python ou C, e ferramentas prontas & diagnóstico imediato com ferramentas existentes & compila com LLVM a cada execução, exige cabeçalhos do kernel \\
+    bpftrace & linguagem própria, de alto nível & investigação interativa em uma linha & não serve para programas de longa duração com lógica complexa \\
+    libbpf & C, com CO-RE & coletores contínuos e distribuíveis & maior esforço de desenvolvimento \\
+    ebpf\_exporter & YAML e C & métricas para o Prometheus & exige escrever o programa C de cada métrica \\
+    \bottomrule
+  \end{tabular}
+  \fonte{Elaborado pelos autores, a partir de \cite{bcc,bpftrace,libbpf,ebpfexporter}.}
+\end{quadro}
+
 \section{BCC}
+
+O BCC (\textit{BPF Compiler Collection}) é um conjunto de ferramentas e uma biblioteca para criar programas eBPF, com interface em Python e C \cite{bcc}. Sua maior contribuição ao dia a dia é a coleção de ferramentas prontas, como as usadas no capítulo \ref{cap:monitoramento} (\texttt{execsnoop}, \texttt{biolatency}, \texttt{tcplife}), que cobrem a maior parte dos diagnósticos comuns sem escrever código. No Ubuntu, instalam-se com o pacote \texttt{bpfcc-tools}, e cada ferramenta recebe o sufixo \texttt{-bpfcc}.
+
+Para casos que as ferramentas não cobrem, o BCC permite escrever o programa eBPF em C dentro de um \textit{script} Python. O exemplo abaixo imprime uma mensagem a cada chamada \texttt{openat}:
+
+\begin{lstlisting}
+from bcc import BPF
+
+programa = """
+int hello(void *ctx) {
+    bpf_trace_printk("openat\\n");
+    return 0;
+}
+"""
+b = BPF(text=programa)
+b.attach_kprobe(event=b.get_syscall_fnname("openat"), fn_name="hello")
+b.trace_print()
+\end{lstlisting}
+% TODO: testar com sudo python3 hello.py (requer o pacote python3-bpfcc).
+
+A limitação do BCC é que ele compila o programa em C no momento da execução, usando o LLVM e os cabeçalhos do kernel instalados na máquina. Isso significa instalar dependências pesadas em cada \textit{host}, esperar a compilação a cada início e manter os cabeçalhos sincronizados com o kernel \cite{nakryiko2020}. É o problema que o CO-RE, descrito no capítulo \ref{cap:introducao}, resolve, e a razão de várias ferramentas do BCC terem versões em \texttt{libbpf}.
 
 \section{bpftrace}
 
-\section{libbpf}
+O \texttt{bpftrace} é uma linguagem de alto nível para eBPF, inspirada no \texttt{awk} e no DTrace \cite{bpftrace}. Um programa é uma lista de sondas, cada uma com um filtro opcional e uma ação:
 
-\section{eBPF Exporters}
+\begin{lstlisting}
+sonda /filtro/ { acao }
+\end{lstlisting}
+
+Os elementos que mais aparecem são as variáveis embutidas (\texttt{pid}, \texttt{comm}, \texttt{nsecs}, \texttt{args}, \texttt{retval}), os mapas, que começam com \texttt{@}, e as funções de agregação (\texttt{count}, \texttt{sum}, \texttt{avg}, \texttt{hist}). Ao encerrar com \texttt{Ctrl+C}, o \texttt{bpftrace} imprime todos os mapas. Para listar as sondas disponíveis e os argumentos de uma delas, use a opção \texttt{-l}:
+
+\begin{lstlisting}
+sudo bpftrace -l 'tracepoint:syscalls:*openat*'
+sudo bpftrace -lv tracepoint:syscalls:sys_enter_openat
+\end{lstlisting}
+% TODO: testar.
+
+O exemplo a seguir soma os bytes enviados por cada processo e imprime o total a cada segundo. O terceiro argumento de \texttt{tcp\_sendmsg}, acessível como \texttt{arg2}, é o tamanho da mensagem:
+
+\begin{lstlisting}
+sudo bpftrace -e '
+kprobe:tcp_sendmsg { @bytes[comm] = sum(arg2); }
+interval:s:1 { print(@bytes); clear(@bytes); }'
+\end{lstlisting}
+% TODO: testar.
+
+O \texttt{bpftrace} é a melhor escolha para investigar um problema em andamento. Para um coletor que ficará dias em execução, com mapas exportados a um painel, um programa em \texttt{libbpf} é mais adequado.
+
+\section{libbpf}\label{sec:libbpf}
+
+A \texttt{libbpf} é a biblioteca que carrega e gerencia programas eBPF: lê o objeto compilado, aplica as realocações CO-RE, envia o programa ao kernel pela chamada \texttt{bpf()}, anexa aos \textit{hooks} e administra os mapas \cite{libbpf}. Os programas escritos com ela são compilados uma única vez e distribuídos como binários, sem compilador no destino.
+
+O exemplo a seguir conta os bytes enviados por porta de destino TCP, a mesma ideia do coletor usado no experimento do TCC \cite{alves2026tcc}. O programa que roda no kernel fica em \texttt{monitor.bpf.c}:
+
+\begin{lstlisting}
+#include "vmlinux.h"
+#include <bpf/bpf_helpers.h>
+#include <bpf/bpf_tracing.h>
+#include <bpf/bpf_core_read.h>
+#include <bpf/bpf_endian.h>
+
+struct {
+    __uint(type, BPF_MAP_TYPE_HASH);
+    __uint(max_entries, 1024);
+    __type(key, __u16);    /* porta TCP de destino */
+    __type(value, __u64);  /* bytes acumulados */
+} bytes_por_porta SEC(".maps");
+
+SEC("kprobe/tcp_sendmsg")
+int BPF_KPROBE(trace_tcp_sendmsg, struct sock *sk,
+               struct msghdr *msg, size_t size)
+{
+    __u16 porta = bpf_ntohs(BPF_CORE_READ(sk, __sk_common.skc_dport));
+    __u64 *total = bpf_map_lookup_elem(&bytes_por_porta, &porta);
+
+    if (total) {
+        __sync_fetch_and_add(total, size);
+    } else {
+        __u64 inicial = size;
+        bpf_map_update_elem(&bytes_por_porta, &porta, &inicial, BPF_NOEXIST);
+    }
+    return 0;
+}
+
+char LICENSE[] SEC("license") = "GPL";
+\end{lstlisting}
+% TODO: compilar e testar (requer clang). Conferir se o kprobe e os includes funcionam no kernel do minicurso.
+
+Alguns detalhes importam. A porta no \textit{socket} está em ordem de bytes de rede, por isso a conversão com \texttt{bpf\_ntohs}. A soma é feita com uma operação atômica, pois o mesmo programa pode rodar em vários núcleos ao mesmo tempo. E a macro \texttt{BPF\_CORE\_READ} é o que permite a leitura do campo de forma portável entre versões do kernel.
+
+A compilação usa o \texttt{clang} com alvo \texttt{bpf}, e o \texttt{vmlinux.h} gerado no capítulo \ref{cap:prerequisitos}:
+
+\begin{lstlisting}
+clang -O2 -g -target bpf -D__TARGET_ARCH_x86 \
+      -I . -c monitor.bpf.c -o monitor.bpf.o
+\end{lstlisting}
+% TODO: testar. Em ARM, trocar __TARGET_ARCH_x86 por __TARGET_ARCH_arm64.
+
+Para carregar o objeto e ler o mapa sem escrever um programa de controle em C, o \texttt{bpftool} faz as duas tarefas:
+
+\begin{lstlisting}
+sudo bpftool prog loadall monitor.bpf.o /sys/fs/bpf/monitor autoattach
+sudo bpftool map dump name bytes_por_porta
+\end{lstlisting}
+% TODO: testar (a opcao autoattach exige um bpftool recente).
+
+Em um coletor real, o programa de controle em espaço do usuário usa a API da \texttt{libbpf} para abrir o objeto, carregá-lo, anexar os programas e ler os mapas periodicamente. O \texttt{bpftool gen skeleton} gera um cabeçalho em C que automatiza esses passos.
+
+\section{eBPF Exporters}\label{sec:ebpf-exporter}
+
+Um \textit{exporter} expõe métricas em um \textit{endpoint} HTTP para o Prometheus buscar \cite{turnbull2018}. O \texttt{ebpf\_exporter}, da Cloudflare, faz isso para métricas coletadas com eBPF: o programa em C, escrito com \texttt{libbpf}, preenche mapas no kernel, e um arquivo YAML descreve como cada mapa vira uma métrica do Prometheus \cite{ebpfexporter}. Em termos de uso, funciona como as ferramentas do BCC, mas com a saída em formato de métricas.
+
+A configuração a seguir, do próprio repositório do projeto, define um contador chamado \texttt{timer\_starts\_total}, que conta os temporizadores do kernel disparados, com um rótulo \texttt{function} decodificado a partir do endereço da função:
+
+\begin{lstlisting}
+metrics:
+  counters:
+    - name: timer_starts_total
+      help: Timers fired in the kernel
+      labels:
+        - name: function
+          size: 8
+          decoders:
+            - name: ksym
+\end{lstlisting}
+
+O \textit{exporter} é executado como processo com privilégios, apontando para a pasta com as configurações, e passa a expor as métricas na porta 9435:
+
+\begin{lstlisting}
+sudo ./ebpf_exporter --config.dir=examples --config.names=timers
+\end{lstlisting}
+% TODO: testar a compilação do ebpf_exporter e o acesso a http://localhost:9435/metrics.
+
+O repositório inclui exemplos prontos, como o histograma de latência de disco (\texttt{biolatency}), e também suporta o envio de \textit{traces} no formato OpenTelemetry \cite{ebpfexporter}. A ligação com o Prometheus e o Grafana é o assunto do capítulo \ref{cap:coleta}.
