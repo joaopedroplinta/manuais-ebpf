@@ -20,14 +20,8 @@ trap cleanup EXIT
 P=/usr/bin/python3.14
 
 echo "== 0. USDT do python3.14 com --no-warnings"
-cat > $W/gc.bt <<EOF
-usdt:$P:python:gc__start { @ini[tid] = nsecs; }
-usdt:$P:python:gc__done /@ini[tid]/ {
-    @us = hist((nsecs - @ini[tid]) / 1000);
-    delete(@ini[tid]);
-}
-EOF
-( timeout --preserve-status -s INT 6 bpftrace --no-warnings $W/gc.bt > $W/usdt-b.out 2>&1 ) & BP=$!
+GC="usdt:$P:python:gc__start { @ini[tid] = nsecs; } usdt:$P:python:gc__done /@ini[tid]/ { @us = hist((nsecs - @ini[tid]) / 1000); delete(@ini[tid]); }"
+( timeout --preserve-status -s INT 6 bpftrace --no-warnings -e "$GC" > $W/usdt-b.out 2>&1 ) & BP=$!
 sleep 2
 $P -c "
 import gc
@@ -77,11 +71,11 @@ start_http_server(8000)
 while True:
     time.sleep(1)
 EOF
-python3 exporter.py > exporter.log 2>&1 & PIDS="$PIDS $!"
+setsid python3 exporter.py < /dev/null > exporter.log 2>&1 & PIDS="$PIDS $!"
 
 echo "== 2. ebpf_exporter, geradores de carga, Prometheus"
-( cd $(dirname $EE) && ./ebpf_exporter --config.dir=examples --config.names=timers,biolatency > $W/ee.log 2>&1 ) & PIDS="$PIDS $!"
-python3 -m http.server 8081 --bind 127.0.0.1 >/dev/null 2>&1 & PIDS="$PIDS $!"
+( cd $(dirname $EE) && exec ./ebpf_exporter --config.dir=examples --config.names=timers,biolatency > $W/ee.log 2>&1 ) & PIDS="$PIDS $!"
+setsid python3 -m http.server 8081 --bind 127.0.0.1 < /dev/null >/dev/null 2>&1 & PIDS="$PIDS $!"
 ( while true; do curl -s http://127.0.0.1:8081/ >/dev/null; sleep 0.3; done ) & PIDS="$PIDS $!"
 ( while true; do dd if=/dev/zero of=$W/io.bin bs=$(( RANDOM % 128 + 4 ))k count=$(( RANDOM % 200 + 20 )) oflag=direct status=none; dd if=$W/io.bin of=/dev/null iflag=direct status=none; sleep 0.5; done ) & PIDS="$PIDS $!"
 cat > prom.yml <<'EOF'
@@ -91,14 +85,14 @@ scrape_configs:
     static_configs:
       - targets: ['localhost:9435', 'localhost:8000']
 EOF
-$PROM --config.file=prom.yml --storage.tsdb.path=$W/promdata --web.listen-address=127.0.0.1:9090 > prom.log 2>&1 & PIDS="$PIDS $!"
+setsid $PROM --config.file=prom.yml --storage.tsdb.path=$W/promdata --web.listen-address=127.0.0.1:9090 < /dev/null > prom.log 2>&1 & PIDS="$PIDS $!"
 sleep 4
 
 echo "== 3. Grafana + painel"
 docker rm -f grafana-painel >/dev/null 2>&1
 docker run -d --rm --network host --name grafana-painel \
   -e GF_AUTH_ANONYMOUS_ENABLED=true -e GF_AUTH_ANONYMOUS_ORG_ROLE=Admin \
-  -e GF_AUTH_DISABLE_LOGIN_FORM=true -e GF_USERS_DEFAULT_THEME=light \
+  -e GF_AUTH_DISABLE_LOGIN_FORM=true -e GF_USERS_DEFAULT_THEME=light -e GF_USERS_DEFAULT_LANGUAGE=pt-BR \
   grafana/grafana:latest >/dev/null || { echo "FALHOU docker run"; exit 1; }
 for i in $(seq 1 40); do curl -s http://localhost:3000/api/health 2>/dev/null | grep -q '"database": "ok"' && break; sleep 2; done
 curl -s -u admin:admin -X POST -H 'Content-Type: application/json' \
@@ -127,7 +121,7 @@ panels = [
      "targets": [{"refId": "A", "datasource": ds, "format": "heatmap", "legendFormat": "{{le}}",
                   "expr": "sum(increase(ebpf_exporter_bio_latency_seconds_bucket[$__rate_interval])) by (le)"}],
      "options": {"calculate": False, "cellGap": 1, "rowsFrame": {"layout": "le"},
-                 "yAxis": {"axisPlacement": "left", "unit": "s"},
+                 "yAxis": {"axisPlacement": "left", "unit": "s", "min": 0, "max": 0.1},
                  "color": {"mode": "scheme", "scheme": "Oranges", "fill": "dark-orange", "scale": "exponential", "exponent": 0.5, "steps": 64}}},
     ts(4, "Temporizadores do kernel disparados por segundo (5 maiores)",
        [("topk(5, rate(ebpf_exporter_timer_starts_total[1m]))", "{{function}}")], "ops", 12, 8),
@@ -152,7 +146,7 @@ done
 echo
 echo "=============================================================="
 echo " PAINEL PRONTO. Abra no navegador (sem login):"
-echo "   http://localhost:3000/d/ebpf-manual1/observabilidade-com-ebpf?orgId=1&from=now-5m&to=now&refresh=5s"
-echo " Espere ~1 min para os graficos encherem, tire o print, e volte aqui."
+echo "   http://localhost:3000/d/ebpf-manual1/observabilidade-com-ebpf?orgId=1&from=now-5m&to=now&refresh=5s&kiosk"
+echo " Espere ~5 min para os graficos cobrirem a janela inteira, tire o print, e volte aqui."
 echo "=============================================================="
 read -r -p "Pressione Enter para encerrar tudo... " _ < /dev/tty

@@ -40,7 +40,6 @@ histogram_quantile(0.95,
 \end{lstlisting}
 
 No teste com o Grafana 13.2.3, o Prometheus foi cadastrado como fonte de dados (URL \texttt{http://localhost:9090}), e as duas consultas acima retornaram resultados pela fonte de dados: a primeira trouxe 24 séries, e a segunda, uma latência no percentil 95 de cerca de 5,6 ms, medida depois de gravar 300 MB em disco com \texttt{dd}. A criação dos painéis em si (séries temporais e mapa de calor) não foi exercitada nesse teste.
-% TODO: adicionar um print de um painel do Grafana (salvar em imagens/ e incluir com \includegraphics).
 
 A função \texttt{rate} converte o contador acumulado em uma taxa por segundo. Já \texttt{histogram\_quantile} calcula percentis a partir dos \textit{buckets} do histograma, e é por isso que a latência de disco deve ser exportada como histograma, e não como média.
 
@@ -115,5 +114,15 @@ Um painel útil responde a perguntas, não exibe todas as métricas disponíveis
   \item \textbf{erros}: retransmissões TCP e processos encerrados por falta de memória;
   \item \textbf{saturação}: latência da fila de execução da CPU e profundidade da fila de disco.
 \end{itemize}
+
+A Figura~\ref{fig:painel-grafana} mostra um painel montado com as métricas dos capítulos anteriores. O gráfico de tráfego usa o \textit{exporter} em Python do capítulo \ref{cap:ferramentas}, e os demais usam o \texttt{ebpf\_exporter}: a latência de disco (percentis 50 e 95), o mapa de calor da distribuição dessa latência e os cinco temporizadores do kernel mais frequentes. O painel foi montado a partir de quatro consultas PromQL, uma por quadro, e atualizado a cada 5 segundos.
+
+\begin{figure}[htb]
+  \caption{Painel do Grafana com métricas coletadas por eBPF}
+  \label{fig:painel-grafana}
+  \centering
+  \includegraphics[width=\textwidth]{painel-grafana.png}
+  \fonte{Elaborado pelos autores.}
+\end{figure}
 
 Alguns cuidados ajudam a manter o painel confiável. Use intervalos de \texttt{rate} de pelo menos quatro vezes o intervalo de coleta, para que cada janela contenha várias amostras. Prefira percentis a médias para latência. Acompanhe o próprio coletor: o consumo de CPU e de memória do \textit{exporter} deve estar no painel, porque o custo da observação é parte do que se quer controlar. E defina alertas só para sintomas que exijam ação, deixando o restante apenas para investigação.

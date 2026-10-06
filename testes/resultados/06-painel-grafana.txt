@@ -1,0 +1,33 @@
+== 0. USDT do python3.14 com --no-warnings
+testes/06-painel-grafana.sh, linha 32: 396972 Abortado                   (imagem do núcleo gravada) ( timeout --preserve-status -s INT 6 bpftrace --no-warnings $W/gc.bt > $W/usdt-b.out 2>&1 )
+--- B (pausa do GC):
+5 warnings generated.
+bpftrace: ./src/ast/location.cpp:86: std::vector<std::__cxx11::basic_string<char> > bpftrace::ast::SourceLocation::source_context() const: Assertion `i <= static_cast<int>(source_->lines_.size())' failed.
+--- A (imports, primeiras linhas):
+5 warnings generated.
+HINT: In file included from stdlib/usdt/usdt.bpf.c:2:
+include/vmlinux.h:2036:3: warning: declaration does not declare anything
+ 2036 |                 struct ns_tree;
+      |                 ^~~~~~~~~~~~~~
+include/vmlinux.h:20697:2: warning: declaration does not declare anything
+== 1. programa libbpf (cap. 5)
+== 2. ebpf_exporter, geradores de carga, Prometheus
+== 3. Grafana + painel
+{"datasource":{"id":1,"uid":"prom-ebpf","orgId":1,"name":"Prometheus","type":"prometheus","typeLogoUrl":"public/plugins/prometheus/img/prometheus_logo.svg","acc
+{"folderUid":"","id":4325875655315456,"slug":"observabilidade-com-ebpf","status":"success","uid":"ebpf-manual1","url":"/d/ebpf-manual1/observabilidade-com-ebpf","version":1}
+== 4. aguardando dados (120 s)...
+--- confere as consultas pelo Grafana:
+success 2 series  <- rate(ebpf_tcp_bytes_enviados_total[1m])
+success 1 series  <- histogram_quantile(0.95, sum by (le) (rate(ebpf_exporter_bio
+success 29 series  <- sum(increase(ebpf_exporter_bio_latency_seconds_bucket[1m])) 
+success 5 series  <- topk(5, rate(ebpf_exporter_timer_starts_total[1m]))
+
+==============================================================
+ PAINEL PRONTO. Abra no navegador (sem login):
+   http://localhost:3000/d/ebpf-manual1/observabilidade-com-ebpf?orgId=1&from=now-5m&to=now&refresh=5s
+ Espere ~1 min para os graficos encherem, tire o print, e volte aqui.
+==============================================================
+Pressione Enter para encerrar tudo... testes/06-painel-grafana.sh: linha 159: encontrado EOF inesperado enquanto procurava por `"' correspondente
+
+encerrando...
+ok

@@ -47,7 +47,7 @@ curl -sL -o ee.tar.gz https://github.com/cloudflare/ebpf_exporter/releases/downl
 tar xzf ee.tar.gz && ls | head -8
 EXBIN=$(find . -name ebpf_exporter -type f | head -1); EXDIR=$(dirname $EXBIN)
 echo "binario: $EXBIN"
-( cd $EXDIR && ./ebpf_exporter --config.dir=examples --config.names=timers,biolatency > $W/ee.log 2>&1 ) & PIDS="$PIDS $!"
+( cd $EXDIR && exec ./ebpf_exporter --config.dir=examples --config.names=timers,biolatency > $W/ee.log 2>&1 ) & PIDS="$PIDS $!"
 sleep 5
 echo "--- metricas em :9435 (trecho):"
 curl -s http://localhost:9435/metrics | grep -E '^ebpf_exporter_timer_starts_total' | head -4
