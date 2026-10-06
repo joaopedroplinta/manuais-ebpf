@@ -106,7 +106,6 @@ int BPF_KPROBE(trace_tcp_sendmsg, struct sock *sk,
 
 char LICENSE[] SEC("license") = "GPL";
 \end{lstlisting}
-% TODO: compilar e testar (requer clang). Conferir se o kprobe e os includes funcionam no kernel do minicurso.
 
 Alguns detalhes importam. A porta no \textit{socket} está em ordem de bytes de rede, por isso a conversão com \texttt{bpf\_ntohs}. A soma é feita com uma operação atômica, pois o mesmo programa pode rodar em vários núcleos ao mesmo tempo. E a macro \texttt{BPF\_CORE\_READ} é o que permite a leitura do campo de forma portável entre versões do kernel.
 
@@ -116,7 +115,8 @@ A compilação usa o \texttt{clang} com alvo \texttt{bpf}, e o \texttt{vmlinux.h
 clang -O2 -g -target bpf -D__TARGET_ARCH_x86 \
       -I . -c monitor.bpf.c -o monitor.bpf.o
 \end{lstlisting}
-% TODO: testar. Em ARM, trocar __TARGET_ARCH_x86 por __TARGET_ARCH_arm64.
+
+Dependendo do kernel, o \texttt{clang} imprime avisos do tipo \texttt{declaration does not declare anything} vindos do \texttt{vmlinux.h}. São inofensivos, e o objeto \texttt{monitor.bpf.o} é gerado normalmente. Em máquinas ARM64, troque \texttt{\_\_TARGET\_ARCH\_x86} por \texttt{\_\_TARGET\_ARCH\_arm64}.
 
 Para carregar o objeto e ler o mapa sem escrever um programa de controle em C, o \texttt{bpftool} faz as duas tarefas:
 
@@ -124,7 +124,22 @@ Para carregar o objeto e ler o mapa sem escrever um programa de controle em C, o
 sudo bpftool prog loadall monitor.bpf.o /sys/fs/bpf/monitor autoattach
 sudo bpftool map dump name bytes_por_porta
 \end{lstlisting}
-% TODO: testar (a opcao autoattach exige um bpftool recente).
+
+Depois de algumas requisições a um servidor local na porta 8080 (por exemplo, \texttt{python3 -m http.server 8080} e alguns \texttt{curl}), o mapa mostra os bytes acumulados por porta de destino. Este é um trecho da saída:
+
+\begin{lstlisting}
+[{
+        "key": 8080,
+        "value": 390
+    },{
+        "key": 35098,
+        "value": 2694
+    },
+    ...
+]
+\end{lstlisting}
+
+A chave 8080 é a porta do servidor de teste. As demais são portas efêmeras de clientes, para as quais o \textit{host} também enviou dados. O programa fica carregado enquanto o diretório fixado existir. Para descarregá-lo, remova-o com \texttt{sudo rm -r /sys/fs/bpf/monitor}.
 
 Em um coletor real, o programa de controle em espaço do usuário usa a API da \texttt{libbpf} para abrir o objeto, carregá-lo, anexar os programas e ler os mapas periodicamente. O \texttt{bpftool gen skeleton} gera um cabeçalho em C que automatiza esses passos.
 

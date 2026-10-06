@@ -59,6 +59,8 @@ import time
 from prometheus_client import start_http_server
 from prometheus_client.core import CounterMetricFamily, REGISTRY
 
+PORTAS = {80, 443, 8080}  # portas de servico de interesse
+
 
 def ler_mapa(nome):
     saida = subprocess.run(["bpftool", "-j", "map", "dump", "name", nome],
@@ -73,7 +75,8 @@ class Coletor:
                                 labels=["porta"])
         for entrada in ler_mapa("bytes_por_porta"):
             f = entrada["formatted"]
-            m.add_metric([str(f["key"])], f["value"])
+            if f["key"] in PORTAS:
+                m.add_metric([str(f["key"])], f["value"])
         yield m
 
 
@@ -82,7 +85,14 @@ start_http_server(8000)
 while True:
     time.sleep(1)
 \end{lstlisting}
-% TODO: testar (rodada 3): sudo python3 exporter.py e curl localhost:8000/metrics. Confirmar o formato do JSON do bpftool ("formatted"). A biblioteca acrescenta _total ao nome do contador.
+
+O filtro \texttt{PORTAS} não é um detalhe. No teste deste manual, sem o filtro, o \textit{exporter} publicou 21 séries depois de apenas cinco requisições, quase todas de portas efêmeras de clientes (como 58674 ou 35098), cada uma com poucos bytes. Em um servidor real, esse número cresce a cada nova conexão. Com o filtro, só as portas listadas aparecem, uma série por porta. Para o servidor de teste na porta 8080, a série tem este formato:
+
+\begin{lstlisting}
+# HELP ebpf_tcp_bytes_enviados_total Bytes enviados por porta de destino
+# TYPE ebpf_tcp_bytes_enviados_total counter
+ebpf_tcp_bytes_enviados_total{porta="8080"} 390.0
+\end{lstlisting}
 
 Por não depender de compilação em tempo de execução, esse \textit{exporter} funciona em qualquer kernel que carregue o programa \texttt{libbpf}. O pacote \texttt{python3-prometheus-client} traz a biblioteca. O \textit{exporter} precisa rodar como \texttt{root}, porque o \texttt{bpftool} exige esse privilégio para ler mapas.
 
