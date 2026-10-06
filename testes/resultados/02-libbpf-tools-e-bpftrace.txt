@@ -1,0 +1,38 @@
+== libbpf-tools (CO-RE)
+PASS  execsnoop-libbpf
+PASS  opensnoop-libbpf
+PASS  biosnoop-libbpf
+PASS  tcpconnect-libbpf
+PASS  oomkill-libbpf
+PASS  syscount-libbpf -i 2
+PASS  runqlat-libbpf 1 2
+PASS  cpudist-libbpf 1 2
+PASS  profile-libbpf -F 99 2
+PASS  cachestat-libbpf 1 2
+PASS  biolatency-libbpf -D 2 1
+FAIL  ext4slower-libbpf 10 (rc=64)
+      ext4slower-libbpf: Too many arguments
+      Try `ext4slower-libbpf --help' or `ext4slower-libbpf --usage' for more
+      information.
+PASS  tcplife-libbpf -L 8080
+PASS  memleak-libbpf -p 1
+== bpftrace (alternativas)
+PASS  runqlat.bt
+PASS  tcp_retransmit_skb
+PASS  oom mark_victim
+PASS  inet_sock_set_state
+PASS  tcplife.bt
+== BCC: motivo da falha (ultimas linhas)
+--- execsnoop-bpfcc
+include/linux/fs.h:2432:15: error: static assertion failed due to requirement 'sizeof(struct filename) % 64 == 0': sizeof(struct filename) % 64 == 0
+1 warning and 1 error generated.
+    raise Exception("Failed to compile BPF module %s" % (src_file or "<text>"))
+Exception: Failed to compile BPF module <text>
+--- runqlat-bpfcc
+include/linux/fs.h:2432:15: error: static assertion failed due to requirement 'sizeof(struct filename) % 64 == 0': sizeof(struct filename) % 64 == 0
+include/linux/ns_common.h:25:23: error: no member named 'ns_id' in 'struct ns_common'
+include/linux/ns_common.h:26:13: error: no member named 'ns_id' in 'struct ns_common'
+include/linux/ns_common.h:62:26: error: no member named '__ns_ref_active' in 'struct ns_common'
+2 warnings and 4 errors generated.
+
+RESUMO: 18 PASS, 1 FAIL

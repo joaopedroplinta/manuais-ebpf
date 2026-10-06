@@ -1,0 +1,49 @@
+== 1. vmlinux.h
+167057 vmlinux.h
+== 2. compilar monitor.bpf.c
+ 42399 |         struct aes_enckey;
+       |         ^~~~~~~~~~~~~~~~~
+./vmlinux.h:58058:3: warning: declaration does not declare anything [-Wmissing-declarations]
+ 58058 |                 struct ns_tree;
+       |                 ^~~~~~~~~~~~~~
+./vmlinux.h:80527:2: warning: declaration does not declare anything [-Wmissing-declarations]
+ 80527 |         struct __filename_head;
+       |         ^~~~~~~~~~~~~~~~~~~~~~
+./vmlinux.h:121327:2: warning: declaration does not declare anything [-Wmissing-declarations]
+ 121327 |         union pipe_index;
+        |         ^~~~~~~~~~~~~~~~
+./vmlinux.h:134848:4: warning: declaration does not declare anything [-Wmissing-declarations]
+ 134848 |                         struct freelist_counters;
+        |                         ^~~~~~~~~~~~~~~~~~~~~~~~
+5 warnings generated.
+OK compilou
+== 3. carregar com bpftool (autoattach)
+571: kprobe  name trace_tcp_sendmsg  tag 7a8f296d27764268  gpl
+	loaded_at 2026-10-06T13:06:27-0300  uid 0
+	xlated 256B  jited 160B  memlock 4096B  map_ids 250
+== 4. gerar trafego na porta 8080
+== 5. ler o mapa (texto)
+[{
+        "key": 8080,
+        "value": 390
+    },{
+        "key": 49644,
+        "value": 2694
+    },{
+        "key": 46930,
+        "value": 34897
+    },{
+        "key": 49658,
+        "value": 2694
+== 5b. ler o mapa (JSON)
+[{"key":["0x90","0x1f"],"value":["0x86","0x01","0x00","0x00","0x00","0x00","0x00","0x00"],"formatted":{"key":8080,"value":390}},{"key":["0xec","0xc1"],"value":["0x86","0x0a","0x00","0x00","0x00","0x00","0x00","0x00"],"formatted":{"key":49644,"value":2694}},{"key":["0x52","0xb7"],"value":["0x51","0x88","0x00","0x00","0x00","0x00","0x00","0x00"],"formatted":{"key":46930,"value":34897}},{"key":["0xfa","0xc1"],"value":["0x86","0x0a","0x00","0x00","0x00","0x00","0x00","0x00"],"formatted":{"key":49658,"value":2694}},{"key":["0x02","0xc5"],"value":["0x51","0x88","0x00","0x00","0x00","0x00","0x00","0x
+== 6. exporter Python
+# HELP ebpf_tcp_bytes_enviados_total Bytes enviados por porta de destino
+# TYPE ebpf_tcp_bytes_enviados_total counter
+ebpf_tcp_bytes_enviados_total{porta="8080"} 390.0
+ebpf_tcp_bytes_enviados_total{porta="80"} 390.0
+ebpf_tcp_bytes_enviados_total{porta="443"} 245.0
+--- log do exporter:
+--- series publicadas (esperado: so portas 80/443/8080):
+3
+== fim

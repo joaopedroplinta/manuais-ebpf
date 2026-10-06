@@ -47,7 +47,7 @@ grep -E '^CONFIG_(BPF|BPF_SYSCALL|BPF_JIT|BPF_EVENTS|KPROBES|UPROBES)=' \
     /boot/config-$(uname -r)
 \end{lstlisting}
 
-Em seguida, instale as dependências:
+Em seguida, instale as dependências. A lista abaixo foi validada em uma instalação limpa do Ubuntu 26.04:
 
 \begin{lstlisting}
 sudo apt update
@@ -56,7 +56,6 @@ sudo apt install -y clang llvm libbpf-dev libelf-dev \
     linux-headers-$(uname -r) \
     bpftrace libbpf-tools python3 python3-pip
 \end{lstlisting}
-% TODO: testar a instalação completa (apt) em uma máquina limpa.
 
 O pacote \texttt{libbpf-tools} instala as ferramentas prontas do capítulo \ref{cap:monitoramento}, com o sufixo \texttt{-libbpf} (por exemplo, \texttt{execsnoop-libbpf}). O BCC, instalado pelo pacote \texttt{bpfcc-tools} e com o sufixo \texttt{-bpfcc}, é opcional e pode falhar em kernels muito recentes, como descrito em \textit{Problemas comuns}.
 
@@ -73,9 +72,18 @@ Para confirmar que tudo funciona, rode um programa mínimo de \texttt{bpftrace} 
 \begin{lstlisting}
 sudo bpftrace -e 'tracepoint:syscalls:sys_enter_openat { @[comm] = count(); }'
 \end{lstlisting}
-% TODO: rodar com sudo e colar um exemplo de saída (o comando exige root).
+Ao encerrar, o \texttt{bpftrace} imprime o mapa, ordenado da menor para a maior contagem. Este é um trecho de uma execução real de 3 segundos:
 
-Se a saída listar nomes de processos com suas contagens, o ambiente está pronto.
+\begin{lstlisting}
+@[pool-870]: 8
+@[blocking-587]: 8
+@[systemd-journal]: 14
+@[blocking-588]: 17
+@[blocking-585]: 25
+@[bwrap]: 33
+\end{lstlisting}
+
+Os nomes como \texttt{blocking-588} e \texttt{pool-870} são nomes de \textit{threads}, que o campo \texttt{comm} também registra. Se a saída listar nomes de processos com suas contagens, o ambiente está pronto.
 
 \subsection*{Problemas comuns}
 

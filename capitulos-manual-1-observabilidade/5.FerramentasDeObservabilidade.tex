@@ -161,11 +161,17 @@ metrics:
             - name: ksym
 \end{lstlisting}
 
-O \textit{exporter} é executado como processo com privilégios, apontando para a pasta com as configurações, e passa a expor as métricas na porta 9435:
+O projeto publica, em suas \textit{releases}, um pacote com o binário e os exemplos já compilados (\texttt{ebpf\_exporter\_with\_examples}), o que dispensa compilar o programa. Depois de extraído, o \textit{exporter} é executado como processo com privilégios, apontando para a pasta com as configurações, e passa a expor as métricas na porta 9435:
 
 \begin{lstlisting}
 sudo ./ebpf_exporter --config.dir=examples --config.names=timers
 \end{lstlisting}
-% TODO: testar a compilação do ebpf_exporter e o acesso a http://localhost:9435/metrics.
+
+Em um teste com a versão 2.5.1, o \textit{exporter} iniciou em cerca de 0,3 s e passou a responder em \texttt{http://localhost:9435/metrics} com linhas como:
+
+\begin{lstlisting}
+ebpf_exporter_timer_starts_total{function="blk_stat_timer_fn"} 42
+ebpf_exporter_timer_starts_total{function="commit_timeout"} 27
+\end{lstlisting}
 
 O repositório inclui exemplos prontos, como o histograma de latência de disco (\texttt{biolatency}), e também suporta o envio de \textit{traces} no formato OpenTelemetry \cite{ebpfexporter}. A ligação com o Prometheus e o Grafana é o assunto do capítulo \ref{cap:coleta}.

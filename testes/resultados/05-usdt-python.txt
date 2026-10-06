@@ -1,0 +1,24 @@
+== sondas disponiveis
+python:audit
+python:gc__done
+python:gc__start
+python:import__find__load__done
+python:import__find__load__start
+== A. modulos importados (import__find__load__start)
+5 warnings generated.
+WARNING: Addrspace is not set
+stdin:1:1-89: WARNING: found external warnings
+usdt:/usr/bin/python3.14:python:import__find__load__start { printf("%s\n", str(arg0)); }
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+HINT: In file included from stdlib/usdt/usdt.bpf.c:2:
+include/vmlinux.h:2036:3: warning: declaration does not declare anything
+ 2036 |                 struct ns_tree;
+      |                 ^~~~~~~~~~~~~~
+include/vmlinux.h:20697:2: warning: declaration does not declare anything
+ 20697 |         union pipe_index;
+       |         ^~~~~~~~~~~~~~~~
+== B. pausa do coletor de lixo (gc__start/gc__done)
+/tmp/claude-1000/-home-pinguas-Documentos-codes-praticas-5/650f6995-195e-4e05-a7c6-3c45a52c4cd7/scratchpad/testar-comandos-5.sh, linha 30: 390539 Abortado                   (imagem do núcleo gravada) ( timeout --preserve-status -s INT 6 bpftrace /tmp/gc.bt > /tmp/usdt-b.out 2>&1 )
+5 warnings generated.
+bpftrace: ./src/ast/location.cpp:86: std::vector<std::__cxx11::basic_string<char> > bpftrace::ast::SourceLocation::source_context() const: Assertion `i <= static_cast<int>(source_->lines_.size())' failed.
+== fim

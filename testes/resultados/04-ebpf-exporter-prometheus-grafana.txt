@@ -1,0 +1,66 @@
+== 1. apt em ambiente limpo (ubuntu:26.04 em contêiner)
+4e07a0f12b2c: Pulling fs layer
+06ad70e463aa: Download complete
+8f70d2bfe91a: Download complete
+4e07a0f12b2c: Download complete
+4e07a0f12b2c: Pull complete
+06ad70e463aa: Pull complete
+Digest: sha256:f144425ff09be612d6d9ad965196e9cdc23dae1f42110a8a11a3e9a8198759f7
+Status: Downloaded newer image for ubuntu:26.04
+apt: OK
+  clang              /usr/bin/clang
+  bpftool            /usr/sbin/bpftool
+  bpftrace           /usr/bin/bpftrace
+  execsnoop-libbpf   /usr/sbin/execsnoop-libbpf
+  python3            /usr/bin/python3
+bpftool v7.7.0
+== 2. saida de exemplo do bpftrace (cap. 2)
+@[blocking-583]: 7
+@[blocking-586]: 7
+@[pool-870]: 8
+@[blocking-587]: 8
+@[systemd-journal]: 14
+@[blocking-588]: 17
+@[blocking-585]: 25
+@[bwrap]: 33
+== 3. USDT no python3.14 (cap. 6)
+usdt:/usr/bin/python3.14:python:audit
+usdt:/usr/bin/python3.14:python:gc__done
+usdt:/usr/bin/python3.14:python:gc__start
+usdt:/usr/bin/python3.14:python:import__find__load__done
+usdt:/usr/bin/python3.14:python:import__find__load__start
+--- top funcoes Python (trecho):
+stdin:1:1-48: ERROR: No matches for usdt /usr/bin/python3.14:function__entry.
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+usdt:/usr/bin/python3.14:python:function__entry { @[str(arg1)] = count(); }
+== 4. ebpf_exporter (cap. 5)
+ebpf_exporter-v2.5.1
+ee.tar.gz
+binario: ./ebpf_exporter-v2.5.1/ebpf_exporter
+--- metricas em :9435 (trecho):
+ebpf_exporter_timer_starts_total{function="blk_rq_timed_out_timer"} 1
+ebpf_exporter_timer_starts_total{function="blk_stat_timer_fn"} 42
+ebpf_exporter_timer_starts_total{function="br_hello_timer_expired	[bridge]"} 2
+ebpf_exporter_timer_starts_total{function="commit_timeout"} 27
+--- log do exporter:
+2026/10/06 13:12:18 Started with capabilities: "=ep"
+2026/10/06 13:12:18 Retaining all existing capabilities
+2026/10/06 13:12:18 Started with 2 programs found in the config in 273ms
+2026/10/06 13:12:18 Listening on :9435
+== 5. Prometheus (cap. 7)
+--- alvo:
+http://localhost:9435/metrics up ''
+--- consulta 1 (rate timers):
+status success | series: 23
+--- consulta 2 (p95 latencia de disco):
+status success | resultado: [1791303204.054, '0.005579901754385968']
+== 6. Grafana (cap. 7)
+{
+  "database": "ok",
+  "version": "13.2.3",
+  "commit": "90ffed056f0884267356c12a0eeb72a022af53f1"
+}
+datasource uid: ag0fc2rz86qkga
+via Grafana: success | series: 24
+via Grafana: success | series: 1
+== fim

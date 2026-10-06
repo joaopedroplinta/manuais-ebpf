@@ -21,9 +21,8 @@ scrape_configs:
     static_configs:
       - targets: ['localhost:9435']
 \end{lstlisting}
-% TODO: testar com o Prometheus real e conferir em Status > Targets.
 
-O intervalo de coleta (\texttt{scrape\_interval}) define a resolução do que o Prometheus enxerga. A agregação no kernel continua contando cada evento, mas o Prometheus só vê o valor acumulado a cada intervalo. Para contadores, isso não causa perda: a diferença entre duas leituras é exatamente o que aconteceu no período. Para valores instantâneos, como uma latência, o ideal é que o programa eBPF já entregue um histograma.
+Em um teste com o Prometheus 3.15.0 e o \texttt{ebpf\_exporter} 2.5.1, o alvo apareceu como \texttt{up} em \textit{Status > Targets} e as métricas ficaram disponíveis para consulta. O intervalo de coleta (\texttt{scrape\_interval}) define a resolução do que o Prometheus enxerga. A agregação no kernel continua contando cada evento, mas o Prometheus só vê o valor acumulado a cada intervalo. Para contadores, isso não causa perda: a diferença entre duas leituras é exatamente o que aconteceu no período. Para valores instantâneos, como uma latência, o ideal é que o programa eBPF já entregue um histograma.
 
 \section{eBPF e Grafana}
 
@@ -39,7 +38,9 @@ rate(ebpf_exporter_timer_starts_total[1m])
 histogram_quantile(0.95,
   sum by (le) (rate(ebpf_exporter_bio_latency_seconds_bucket[5m])))
 \end{lstlisting}
-% TODO: testar no Grafana com o ebpf_exporter rodando.
+
+No teste com o Grafana 13.2.3, o Prometheus foi cadastrado como fonte de dados (URL \texttt{http://localhost:9090}), e as duas consultas acima retornaram resultados pela fonte de dados: a primeira trouxe 24 séries, e a segunda, uma latência no percentil 95 de cerca de 5,6 ms, medida depois de gravar 300 MB em disco com \texttt{dd}. A criação dos painéis em si (séries temporais e mapa de calor) não foi exercitada nesse teste.
+% TODO: adicionar um print de um painel do Grafana (salvar em imagens/ e incluir com \includegraphics).
 
 A função \texttt{rate} converte o contador acumulado em uma taxa por segundo. Já \texttt{histogram\_quantile} calcula percentis a partir dos \textit{buckets} do histograma, e é por isso que a latência de disco deve ser exportada como histograma, e não como média.
 

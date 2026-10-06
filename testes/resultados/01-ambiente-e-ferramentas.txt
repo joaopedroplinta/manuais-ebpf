@@ -1,0 +1,88 @@
+== cap. 2: ambiente
+PASS  bpftool prog show
+PASS  bpftrace openat
+== cap. 4: monitoramento (bpftrace)
+PASS  execve
+PASS  raw_syscalls
+PASS  profile hz
+PASS  mm_page_alloc
+PASS  biolat.bt
+== cap. 4: monitoramento (BCC)
+FAIL  execsnoop-bpfcc (rc=1)
+      In file included from /virtual/main.c:16:
+      include/linux/fs.h:2428:2: warning: declaration does not declare anything [-Wmissing-declarations]
+       2428 |         struct __filename_head;
+            |         ^~~~~~~~~~~~~~~~~~~~~~
+PASS  opensnoop-bpfcc
+FAIL  biosnoop-bpfcc (rc=1)
+      In file included from /virtual/main.c:3:
+      In file included from include/linux/blk-mq.h:5:
+      In file included from include/linux/blkdev.h:9:
+      In file included from include/linux/blk_types.h:10:
+FAIL  tcpconnect-bpfcc (rc=1)
+      In file included from /virtual/main.c:15:
+      In file included from include/net/sock.h:46:
+      In file included from include/linux/netdevice.h:38:
+      In file included from include/net/net_namespace.h:42:
+FAIL  tcpretrans-bpfcc (rc=1)
+      In file included from /virtual/main.c:3:
+      In file included from include/net/sock.h:46:
+      In file included from include/linux/netdevice.h:38:
+      In file included from include/net/net_namespace.h:42:
+FAIL  oomkill-bpfcc (rc=1)
+      In file included from /virtual/main.c:3:
+      In file included from include/linux/oom.h:10:
+      In file included from include/linux/mm.h:1473:
+      In file included from include/linux/huge_mm.h:7:
+PASS  syscount-bpfcc -i 2
+FAIL  runqlat-bpfcc 1 2 (rc=1)
+      In file included from /virtual/main.c:5:
+      In file included from include/linux/pid_namespace.h:7:
+      In file included from include/linux/mm.h:1473:
+      In file included from include/linux/huge_mm.h:7:
+PASS  cpudist-bpfcc 1 2
+FAIL  profile-bpfcc -F 99 2 (rc=1)
+      In file included from /virtual/main.c:15:
+      In file included from include/uapi/linux/bpf_perf_event.h:11:
+      In file included from arch/x86/include/generated/uapi/asm/bpf_perf_event.h:1:
+      In file included from include/uapi/asm-generic/bpf_perf_event.h:4:
+FAIL  cachestat-bpfcc 1 2 (rc=130)
+      Traceback (most recent call last):
+        File "/usr/sbin/cachestat-bpfcc", line 137, in <module>
+          if BPF.get_kprobe_functions(b'folio_account_dirtied'):
+             ~~~~~~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^
+FAIL  biolatency-bpfcc -D 2 1 (rc=1)
+      In file included from /virtual/main.c:3:
+      In file included from include/linux/blk-mq.h:5:
+      In file included from include/linux/blkdev.h:9:
+      In file included from include/linux/blk_types.h:10:
+FAIL  ext4slower-bpfcc 10 (rc=1)
+      In file included from /virtual/main.c:3:
+      include/linux/fs.h:2428:2: warning: declaration does not declare anything [-Wmissing-declarations]
+       2428 |         struct __filename_head;
+            |         ^~~~~~~~~~~~~~~~~~~~~~
+FAIL  tcplife-bpfcc -L 8080 (rc=1)
+      In file included from /virtual/main.c:3:
+      In file included from include/linux/tcp.h:17:
+      In file included from include/linux/skbuff.h:17:
+      In file included from include/linux/bvec.h:10:
+== cap. 5 e 6: bpftrace
+PASS  listar openat
+PASS  args openat
+PASS  tcp_sendmsg sum
+PASS  kprobe tcp_*
+PASS  vfs_read latencia
+PASS  sched tracepoints
+PASS  block_rq_issue args
+PASS  sched_process_exec
+PASS  uretprobe bash readline
+PASS  profile kstack
+PASS  page-faults
+== cap. 5: BCC em Python
+FAIL  hello.py (BCC) (rc=130)
+      b'           <...>-359067  [006] ...21 63937.024463: bpf_trace_printk: openat'
+      b''
+      b'           <...>-359068  [002] ...21 63937.796130: bpf_trace_printk: openat'
+      b''
+
+RESUMO: 21 PASS, 12 FAIL
