@@ -4,22 +4,49 @@ Antes de usar o eBPF para coletar dados, é preciso saber o que se quer observar
 
 \section{O que é observabilidade}
 
-Observabilidade é a capacidade de entender o estado interno de um sistema a partir dos dados que ele produz, sem precisar alterá-lo para cada nova pergunta \cite{majors2022}. A diferença para o monitoramento tradicional está no tipo de pergunta: o monitoramento avisa que algo conhecido saiu do normal (a CPU passou de 90\%), enquanto a observabilidade deve permitir investigar problemas que ninguém previu (por que as requisições na porta 8080 ficam lentas só às terças?).
+Observabilidade é a capacidade de entender o estado interno de um sistema a partir dos dados que ele produz, sem precisar alterá-lo para cada nova pergunta \cite{majors2022}. A diferença para o monitoramento tradicional está no tipo de pergunta: o monitoramento avisa que algo conhecido saiu do normal (a CPU passou de 90\%), enquanto a observabilidade deve permitir investigar problemas que ninguém previu (por que as requisições na porta 8080 ficam lentas só às terças?). Na prática, as duas se complementam: alertas dizem que existe um problema, e dados detalhados ajudam a descobrir a causa.
 
-Os dados costumam ser agrupados em três categorias, chamadas de pilares: \textit{logs}, métricas e \textit{traces}. Este manual trata ainda de uma quarta forma, os eventos, por ser a matéria-prima natural do eBPF.
+Os dados costumam ser agrupados em três categorias, chamadas de pilares: \textit{logs}, métricas e \textit{traces}. Este manual trata ainda de uma quarta forma, os eventos, por ser a matéria-prima natural do eBPF. O Quadro~\ref{quad:pilares} resume as quatro e o papel do eBPF em cada uma.
+
+\begin{quadro}[htb]
+  \caption{Tipos de dado de observabilidade e o papel do eBPF}
+  \label{quad:pilares}
+  \small
+  \begin{tabular}{@{}p{2cm}p{4.6cm}p{3cm}p{4.6cm}@{}}
+    \toprule
+    \textbf{Tipo} & \textbf{O que registra} & \textbf{Exemplo} & \textbf{Papel do eBPF} \\
+    \midrule
+    Logs & texto com marca de tempo & \texttt{journalctl} & gera registros sobre o que o kernel viu \\
+    Métricas & valores numéricos agregados & \texttt{vmstat 1} & agrega no kernel, a cada evento \\
+    Traces & caminho de uma requisição & \textit{spans} com ID de \textit{trace} & cobre apenas a parte visível ao kernel \\
+    Eventos & ocorrência individual & \texttt{execve}, pacote recebido & captura direta, no \textit{hook} \\
+    \bottomrule
+  \end{tabular}
+  \fonte{Elaborado pelos autores.}
+\end{quadro}
 
 \section{Logs}
 
-\textit{Logs} são registros de texto, com marca de tempo, que descrevem algo que aconteceu: uma requisição atendida, um erro, uma falha de autenticação. Em Linux, aparecem em arquivos de \texttt{/var/log} e no \texttt{journald}. São ricos em contexto, mas dependem de o desenvolvedor ter previsto aquela mensagem, e o volume cresce rápido. O eBPF não substitui os \textit{logs} da aplicação, mas permite gerar registros sobre o que o kernel viu, como processos executados ou conexões abertas, sem mexer no código observado.
+\textit{Logs} são registros de texto, com marca de tempo, que descrevem algo que aconteceu: uma requisição atendida, um erro, uma falha de autenticação. Em Linux, aparecem em arquivos de \texttt{/var/log} e no \texttt{journald}, que se consulta com \texttt{journalctl}. São ricos em contexto, mas dependem de o desenvolvedor ter previsto aquela mensagem, e o volume cresce rápido, o que encarece armazenamento e busca. Um \textit{log} que ninguém escreveu não pode ser consultado depois.
+
+O eBPF não substitui os \textit{logs} da aplicação, mas permite gerar registros sobre o que o kernel viu, como processos executados, arquivos abertos ou conexões estabelecidas, sem mexer no código observado. É útil justamente quando a aplicação não registra o que se precisa saber, ou quando o código-fonte não está disponível.
 
 \section{Métricas}
 
-Métricas são valores numéricos agregados ao longo do tempo, como taxa de requisições, uso de memória ou bytes transmitidos por segundo. São baratas de armazenar e boas para painéis e alertas. O Prometheus segue esse modelo: um servidor busca periodicamente, por HTTP, as métricas expostas pelos \textit{exporters} \cite{turnbull2018}. A limitação é a resolução. Uma métrica coletada a cada segundo esconde um pico de 200 ms que começou e terminou entre duas amostras \cite{research2024}. Com eBPF, a agregação ocorre no kernel a cada evento, e o espaço do usuário apenas lê o contador já consolidado \cite{gregg2019}.
+Métricas são valores numéricos agregados ao longo do tempo, como taxa de requisições, uso de memória ou bytes transmitidos por segundo. São baratas de armazenar e boas para painéis e alertas. No modelo do Prometheus, por exemplo, uma métrica pode ser um contador (que só cresce, como o total de bytes), um \textit{gauge} (que sobe e desce, como a memória em uso) ou um histograma (que distribui valores em faixas, como latências) \cite{turnbull2018}. O mesmo modelo usa um servidor que busca periodicamente, por HTTP, as métricas expostas pelos \textit{exporters}.
+
+Duas referências ajudam a decidir quais métricas coletar. Os quatro sinais dourados do livro de engenharia de confiabilidade do Google são latência, tráfego, erros e saturação \cite{beyer2016}. O método USE, de Brendan Gregg, propõe examinar, para cada recurso (CPU, memória, disco, rede), a utilização, a saturação e os erros \cite{gregg2020}. As duas ideias aparecem nos exemplos práticos deste manual.
+
+A limitação das métricas é a resolução. Uma métrica coletada a cada segundo esconde um pico de 200 ms que começou e terminou entre duas amostras \cite{research2024}. Também há o custo de cardinalidade: cada combinação de rótulos (por exemplo, uma métrica por porta e por processo) vira uma série temporal a mais para armazenar. Com eBPF, a agregação ocorre no kernel a cada evento, e o espaço do usuário apenas lê o contador já consolidado \cite{gregg2019}.
 
 \section{Traces}
 
-\textit{Traces} acompanham o caminho de uma requisição por vários componentes, registrando quanto tempo ela passou em cada etapa. São os mais úteis em arquiteturas de microsserviços, onde uma única chamada atravessa vários serviços. Normalmente exigem instrumentação na aplicação. O eBPF cobre a parte que fica visível ao kernel, como o tempo entre o envio e a resposta de uma conexão TCP, e não vê o que acontece dentro da lógica da aplicação.
+\textit{Traces} acompanham o caminho de uma requisição por vários componentes, registrando quanto tempo ela passou em cada etapa. Cada etapa é um \textit{span}, e todos os \textit{spans} de uma mesma requisição compartilham um identificador, que precisa ser repassado de um serviço para o outro (propagação de contexto). São os mais úteis em arquiteturas de microsserviços, onde uma única chamada atravessa vários serviços, e mostram onde o tempo está sendo gasto.
+
+Normalmente exigem instrumentação na aplicação, em geral por meio de bibliotecas como o OpenTelemetry. O eBPF cobre a parte que fica visível ao kernel, como o tempo entre o envio e a resposta de uma conexão TCP, ou o tempo gasto em uma chamada de sistema. Ele não vê o que acontece dentro da lógica da aplicação, então complementa os \textit{traces} em vez de substituí-los.
 
 \section{Eventos}
 
-Evento é a ocorrência individual de algo no sistema: um \texttt{execve}, o recebimento de um pacote, uma escrita em disco. Logs, métricas e \textit{traces} podem ser vistos como formas de resumir eventos. O eBPF opera diretamente nesse nível: um programa anexado a um \textit{hook} é executado a cada evento, e pode registrá-lo inteiro ou apenas atualizar um contador \cite{gregg2019}. Essa é a razão de o eBPF alcançar a granularidade de microssegundos, e também a razão de o custo precisar de atenção: quanto mais frequente o evento, mais vezes o programa roda.
+Evento é a ocorrência individual de algo no sistema: um \texttt{execve}, o recebimento de um pacote, uma escrita em disco. Logs, métricas e \textit{traces} podem ser vistos como formas de resumir eventos. O eBPF opera diretamente nesse nível: um programa anexado a um \textit{hook} é executado a cada evento, e pode registrá-lo inteiro, enviando-o ao espaço do usuário, ou apenas atualizar um contador em um mapa \cite{gregg2019}.
+
+Essa escolha é o principal ajuste de projeto de uma coleta com eBPF. Registrar cada evento dá o máximo de detalhe, mas custa mais e gera volume. Agregar no kernel é mais barato e escala melhor, mas perde o detalhe individual. É também a razão de o eBPF alcançar a granularidade de microssegundos, e de o custo precisar de atenção: quanto mais frequente o evento, mais vezes o programa roda.
