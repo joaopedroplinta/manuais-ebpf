@@ -1,7 +1,65 @@
 \chapter{Pré-requisitos}
 
+Este capítulo lista o que é necessário saber e instalar antes de seguir o manual. Os comandos foram pensados para Ubuntu, a distribuição usada no minicurso.
+
 \section{Conhecimentos necessários}
+
+Não é preciso saber programar para o kernel, mas alguns conhecimentos são assumidos:
+
+\begin{itemize}
+  \item uso confortável do terminal Linux, de \texttt{sudo} e do gerenciador de pacotes da distribuição;
+  \item noção de processo, chamada de sistema (\textit{syscall}) e da separação entre espaço do usuário e kernel;
+  \item leitura básica de C, suficiente para acompanhar os exemplos de \textit{struct}, ponteiros e funções;
+  \item noções de rede (TCP, portas) e de métricas de sistema (CPU, memória, I/O), úteis nos exemplos práticos.
+\end{itemize}
+
+Conhecer o \texttt{/proc} ajuda a entender por que o eBPF é uma alternativa, mas não é obrigatório.
 
 \section{Ferramentas necessárias}
 
+\begin{itemize}
+  \item \textbf{Kernel Linux 5.4 ou superior} com BTF habilitado (\texttt{CONFIG\_DEBUG\_INFO\_BTF=y}). Para os recursos mais novos, prefira o 5.8 ou superior. A maioria das instalações Ubuntu 20.04 ou mais recentes já atende.
+  \item \textbf{Permissão de superusuário} (\texttt{root}, ou as capacidades \texttt{CAP\_BPF} e \texttt{CAP\_SYS\_ADMIN}) para carregar programas no kernel \cite{linuxkernel2024}.
+  \item \textbf{clang e LLVM}, que compilam o C para \textit{bytecode} eBPF.
+  \item \textbf{libbpf e libelf}, para carregar e gerenciar os programas.
+  \item \textbf{bpftool}, para inspecionar programas e mapas carregados e gerar o cabeçalho \texttt{vmlinux.h}.
+  \item \textbf{bpftrace} e \textbf{BCC}, para consultas e \textit{scripts} rápidos (capítulo \ref{cap:ferramentas}).
+  \item \textbf{Docker}, opcional, para os exemplos com contêineres.
+\end{itemize}
+
 \section{Instalação e configuração do ambiente}
+
+Primeiro, verifique se o kernel atende aos requisitos:
+
+\begin{lstlisting}
+uname -r
+ls /sys/kernel/btf/vmlinux
+grep CONFIG_DEBUG_INFO_BTF /boot/config-$(uname -r)
+\end{lstlisting}
+
+O segundo comando deve listar o arquivo sem erro, e o terceiro deve retornar \texttt{CONFIG\_DEBUG\_INFO\_BTF=y}. Se o arquivo não existir, o kernel não expõe BTF e os programas CO-RE deste manual não vão carregar.
+
+Em seguida, instale as dependências:
+
+\begin{lstlisting}
+sudo apt update
+sudo apt install -y clang llvm libbpf-dev libelf-dev \
+                    linux-tools-$(uname -r) linux-headers-$(uname -r) \
+                    bpftrace bpfcc-tools python3 python3-pip
+\end{lstlisting}
+% TODO: testar a instalação de bpftrace e bpfcc-tools no Ubuntu do minicurso.
+
+O pacote \texttt{linux-tools} traz o \texttt{bpftool}. Com ele, gere o cabeçalho com todos os tipos do kernel em uso, que os programas em C incluirão no lugar dos cabeçalhos tradicionais:
+
+\begin{lstlisting}
+bpftool btf dump file /sys/kernel/btf/vmlinux format c > vmlinux.h
+\end{lstlisting}
+
+Para confirmar que tudo funciona, rode um programa mínimo de \texttt{bpftrace} que conta as chamadas \texttt{openat} por processo. Deixe-o rodando alguns segundos e encerre com \texttt{Ctrl+C}, que imprime o mapa acumulado:
+
+\begin{lstlisting}
+sudo bpftrace -e 'tracepoint:syscalls:sys_enter_openat { @[comm] = count(); }'
+\end{lstlisting}
+% TODO: testar o comando e colar um exemplo de saída.
+
+Se a saída listar nomes de processos com suas contagens, o ambiente está pronto. Se aparecer erro de permissão, repita o comando com \texttt{sudo}. Se o \texttt{bpftrace} reclamar do \textit{tracepoint}, confira o kernel com \texttt{uname -r} e a seção de requisitos acima.

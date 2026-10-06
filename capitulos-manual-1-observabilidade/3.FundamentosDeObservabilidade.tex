@@ -1,9 +1,26 @@
 \chapter{Fundamentos de Observabilidade}
 
+Antes de usar o eBPF para coletar dados, é preciso saber o que se quer observar e em que forma esses dados aparecem. Este capítulo apresenta o conceito de observabilidade e os tipos de dado que ela usa, com destaque para onde o eBPF se encaixa em cada um.
+
 \section{O que é observabilidade}
+
+Observabilidade é a capacidade de entender o estado interno de um sistema a partir dos dados que ele produz, sem precisar alterá-lo para cada nova pergunta. A diferença para o monitoramento tradicional está no tipo de pergunta: o monitoramento avisa que algo conhecido saiu do normal (a CPU passou de 90\%), enquanto a observabilidade deve permitir investigar problemas que ninguém previu (por que as requisições na porta 8080 ficam lentas só às terças?).
+% TODO: citar uma referência de observabilidade (por exemplo, o livro Observability Engineering, de Majors, Fong-Jones e Miranda, 2022) e incluí-la no referencias.bib.
+
+Os dados costumam ser agrupados em três categorias, chamadas de pilares: \textit{logs}, métricas e \textit{traces}. Este manual trata ainda de uma quarta forma, os eventos, por ser a matéria-prima natural do eBPF.
+
+\section{Logs}
+
+\textit{Logs} são registros de texto, com marca de tempo, que descrevem algo que aconteceu: uma requisição atendida, um erro, uma falha de autenticação. Em Linux, aparecem em arquivos de \texttt{/var/log} e no \texttt{journald}. São ricos em contexto, mas dependem de o desenvolvedor ter previsto aquela mensagem, e o volume cresce rápido. O eBPF não substitui os \textit{logs} da aplicação, mas permite gerar registros sobre o que o kernel viu, como processos executados ou conexões abertas, sem mexer no código observado.
 
 \section{Métricas}
 
+Métricas são valores numéricos agregados ao longo do tempo, como taxa de requisições, uso de memória ou bytes transmitidos por segundo. São baratas de armazenar e boas para painéis e alertas. O Prometheus segue esse modelo: um servidor busca periodicamente, por HTTP, as métricas expostas pelos \textit{exporters} \cite{turnbull2018}. A limitação é a resolução. Uma métrica coletada a cada segundo esconde um pico de 200 ms que começou e terminou entre duas amostras \cite{research2024}. Com eBPF, a agregação ocorre no kernel a cada evento, e o espaço do usuário apenas lê o contador já consolidado \cite{gregg2019}.
+
 \section{Traces}
 
+\textit{Traces} acompanham o caminho de uma requisição por vários componentes, registrando quanto tempo ela passou em cada etapa. São os mais úteis em arquiteturas de microsserviços, onde uma única chamada atravessa vários serviços. Normalmente exigem instrumentação na aplicação. O eBPF cobre a parte que fica visível ao kernel, como o tempo entre o envio e a resposta de uma conexão TCP, e não vê o que acontece dentro da lógica da aplicação.
+
 \section{Eventos}
+
+Evento é a ocorrência individual de algo no sistema: um \texttt{execve}, o recebimento de um pacote, uma escrita em disco. Logs, métricas e \textit{traces} podem ser vistos como formas de resumir eventos. O eBPF opera diretamente nesse nível: um programa anexado a um \textit{hook} é executado a cada evento, e pode registrá-lo inteiro ou apenas atualizar um contador \cite{gregg2019}. Essa é a razão de o eBPF alcançar a granularidade de microssegundos, e também a razão de o custo precisar de atenção: quanto mais frequente o evento, mais vezes o programa roda.
