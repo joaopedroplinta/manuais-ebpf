@@ -19,7 +19,7 @@ Há três formas de usar o eBPF para observabilidade, em ordem crescente de esfo
   \fonte{Elaborado pelos autores, a partir de \cite{bcc,bpftrace,libbpf,ebpfexporter}.}
 \end{quadro}
 
-\section{BCC}
+\section{BCC}\label{sec:bcc}
 
 O BCC (\textit{BPF Compiler Collection}) é um conjunto de ferramentas e uma biblioteca para criar programas eBPF, com interface em Python e C \cite{bcc}. Sua maior contribuição ao dia a dia é a coleção de ferramentas prontas, como as usadas no capítulo \ref{cap:monitoramento} (\texttt{execsnoop}, \texttt{biolatency}, \texttt{tcplife}), que cobrem a maior parte dos diagnósticos comuns sem escrever código. No Ubuntu, instalam-se com o pacote \texttt{bpfcc-tools}, e cada ferramenta recebe o sufixo \texttt{-bpfcc}.
 
@@ -38,9 +38,10 @@ b = BPF(text=programa)
 b.attach_kprobe(event=b.get_syscall_fnname("openat"), fn_name="hello")
 b.trace_print()
 \end{lstlisting}
-% TODO: testar com sudo python3 hello.py (requer o pacote python3-bpfcc).
 
-A limitação do BCC é que ele compila o programa em C no momento da execução, usando o LLVM e os cabeçalhos do kernel instalados na máquina. Isso significa instalar dependências pesadas em cada \textit{host}, esperar a compilação a cada início e manter os cabeçalhos sincronizados com o kernel \cite{nakryiko2020}. É o problema que o CO-RE, descrito no capítulo \ref{cap:introducao}, resolve, e a razão de várias ferramentas do BCC terem versões em \texttt{libbpf}.
+A limitação do BCC é que ele compila o programa em C no momento da execução, usando o LLVM e os cabeçalhos do kernel instalados na máquina. Isso significa instalar dependências pesadas em cada \textit{host}, esperar a compilação a cada início e manter os cabeçalhos sincronizados com o kernel \cite{nakryiko2020}. Na prática, o problema aparece com kernels recentes: no ambiente de testes deste manual (Ubuntu 26.04, kernel 7.0 e BCC 0.35.0), 11 das 14 ferramentas prontas do BCC testadas falharam com erros de compilação nos cabeçalhos do kernel, como \texttt{static assertion failed} e \texttt{no member named 'ns\_id' in 'struct ns\_common'}. O exemplo em Python acima funcionou porque não inclui cabeçalhos do kernel. Programas que dependem de estruturas internas, como a maioria das ferramentas prontas, quebram quando o kernel muda mais rápido que o BCC.
+
+É o problema que o CO-RE, descrito no capítulo \ref{cap:introducao}, resolve. O pacote \texttt{libbpf-tools} reúne versões CO-RE das mesmas ferramentas, com o sufixo \texttt{-libbpf}, que não compilam nada na execução. No mesmo ambiente, 13 das 14 foram executadas sem erro, e por isso este manual as prefere (capítulo \ref{cap:monitoramento}).
 
 \section{bpftrace}
 
@@ -56,7 +57,6 @@ Os elementos que mais aparecem são as variáveis embutidas (\texttt{pid}, \text
 sudo bpftrace -l 'tracepoint:syscalls:*openat*'
 sudo bpftrace -lv tracepoint:syscalls:sys_enter_openat
 \end{lstlisting}
-% TODO: testar.
 
 O exemplo a seguir soma os bytes enviados por cada processo e imprime o total a cada segundo. O terceiro argumento de \texttt{tcp\_sendmsg}, acessível como \texttt{arg2}, é o tamanho da mensagem:
 
@@ -65,7 +65,6 @@ sudo bpftrace -e '
 kprobe:tcp_sendmsg { @bytes[comm] = sum(arg2); }
 interval:s:1 { print(@bytes); clear(@bytes); }'
 \end{lstlisting}
-% TODO: testar.
 
 O \texttt{bpftrace} é a melhor escolha para investigar um problema em andamento. Para um coletor que ficará dias em execução, com mapas exportados a um painel, um programa em \texttt{libbpf} é mais adequado.
 

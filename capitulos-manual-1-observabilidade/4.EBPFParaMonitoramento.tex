@@ -1,19 +1,18 @@
 \chapter{eBPF para Monitoramento}\label{cap:monitoramento}
 
-Este capítulo mostra o que o eBPF permite monitorar em um host Linux: processos e chamadas de sistema, CPU e memória, disco e aplicações. Cada seção usa o roteiro do método USE, que examina utilização, saturação e erros de cada recurso \cite{gregg2020}, e apresenta comandos prontos para executar. Os exemplos usam as ferramentas do BCC, que no Ubuntu têm o sufixo \texttt{-bpfcc} (por exemplo, \texttt{execsnoop-bpfcc}), e \textit{scripts} de \texttt{bpftrace}. Ambas são apresentadas em detalhe no capítulo \ref{cap:ferramentas}. Todos os comandos exigem \texttt{root}.
+Este capítulo mostra o que o eBPF permite monitorar em um host Linux: processos e chamadas de sistema, CPU e memória, disco e aplicações. Cada seção usa o roteiro do método USE, que examina utilização, saturação e erros de cada recurso \cite{gregg2020}, e apresenta comandos prontos para executar. Os exemplos usam dois tipos de ferramenta: as ferramentas prontas do pacote \texttt{libbpf-tools}, que no Ubuntu têm o sufixo \texttt{-libbpf} (por exemplo, \texttt{execsnoop-libbpf}), e \textit{scripts} de \texttt{bpftrace}. As ferramentas \texttt{-libbpf} usam CO-RE e não compilam nada na hora da execução, o que as torna mais confiáveis que as equivalentes do BCC (seção \ref{sec:bcc}). Todos os comandos foram testados em Ubuntu 26.04 com kernel 7.0 e exigem \texttt{root}.
 
 \section{Rastreamento de processos e chamadas de sistema}
 
 Chamadas de sistema são o ponto onde toda aplicação pede algo ao kernel: abrir um arquivo, criar um processo, enviar dados. Observá-las mostra o que um programa realmente faz, sem ler seu código. A ferramenta clássica para isso é o \texttt{strace}, que usa \texttt{ptrace} e interrompe o processo a cada chamada, o que pode reduzir bastante seu desempenho \cite{gregg2019}. Com eBPF, o programa de coleta roda no kernel e o processo observado não é interrompido.
 
-Três ferramentas do BCC cobrem os casos mais comuns:
+Três ferramentas cobrem os casos mais comuns:
 
 \begin{lstlisting}
-sudo execsnoop-bpfcc          # cada novo processo (execve), com argumentos
-sudo opensnoop-bpfcc          # cada arquivo aberto, por processo
-sudo syscount-bpfcc -i 5      # contagem de chamadas por tipo, a cada 5 s
+sudo execsnoop-libbpf          # cada novo processo (execve), com argumentos
+sudo opensnoop-libbpf          # cada arquivo aberto, por processo
+sudo syscount-libbpf -i 5      # contagem de chamadas por tipo, a cada 5 s
 \end{lstlisting}
-% TODO: testar os três comandos e colar uma saída de exemplo.
 
 O \texttt{execsnoop} é útil para descobrir processos de vida curta, como \textit{scripts} disparados pelo \texttt{cron}, que desaparecem antes de um \texttt{ps} ou de uma amostra de \textit{polling} enxergá-los. O mesmo resultado pode ser obtido com uma linha de \texttt{bpftrace}, ligada ao \textit{tracepoint} da chamada \texttt{execve}:
 
@@ -21,42 +20,37 @@ O \texttt{execsnoop} é útil para descobrir processos de vida curta, como \text
 sudo bpftrace -e 'tracepoint:syscalls:sys_enter_execve {
     printf("%-6d %-16s -> %s\n", pid, comm, str(args->filename)); }'
 \end{lstlisting}
-% TODO: testar.
 
 Para uma visão agregada, conte as chamadas de sistema por processo. O \textit{tracepoint} \texttt{raw\_syscalls:sys\_enter} dispara em qualquer chamada, de modo que o contador mostra quais processos mais usam o kernel:
 
 \begin{lstlisting}
 sudo bpftrace -e 'tracepoint:raw_syscalls:sys_enter { @[comm] = count(); }'
 \end{lstlisting}
-% TODO: testar.
 
 \section{Monitoramento de CPU e memória}
 
-Na CPU, o método USE pergunta quanto tempo ela está ocupada (utilização) e quanto trabalho espera para rodar (saturação). A utilização está em ferramentas conhecidas, como o \texttt{top}. A saturação é o que o eBPF mostra bem: o \texttt{runqlat} mede quanto tempo cada tarefa espera na fila de execução até receber a CPU, e apresenta um histograma:
+Na CPU, o método USE pergunta quanto tempo ela está ocupada (utilização) e quanto trabalho espera para rodar (saturação). A utilização está em ferramentas conhecidas, como o \texttt{top}. A saturação é o que o eBPF mostra bem: o \texttt{runqlat} mede quanto tempo cada tarefa espera na fila de execução até receber a CPU, e apresenta um histograma. O \texttt{cpudist} mostra por quanto tempo as tarefas rodam a cada vez que recebem a CPU:
 
 \begin{lstlisting}
-sudo runqlat-bpfcc 1 5        # histograma de latencia de fila, 5 amostras de 1 s
-sudo cpudist-bpfcc 1 5        # quanto tempo as tarefas rodam a cada vez
+sudo runqlat-libbpf 1 5        # histograma da fila de execucao, 5 amostras de 1 s
+sudo cpudist-libbpf 1 5        # quanto tempo as tarefas rodam a cada vez
 \end{lstlisting}
-% TODO: testar.
 
-Para saber \textit{o que} consome CPU, use amostragem: a cada 99 Hz o kernel registra o processo (e a pilha de chamadas) que está rodando. A taxa de 99 Hz, e não 100, evita sincronizar com eventos periódicos do sistema:
+Para saber \textit{o que} consome CPU, use amostragem: a cada 99 Hz o kernel registra o processo (e, se pedido, a pilha de chamadas) que está rodando. A taxa de 99 Hz, e não 100, evita sincronizar com eventos periódicos do sistema:
 
 \begin{lstlisting}
 sudo bpftrace -e 'profile:hz:99 { @[comm] = count(); }'
-sudo profile-bpfcc -F 99 10   # com pilhas, durante 10 s
+sudo profile-libbpf -F 99 10   # com pilhas de chamadas, durante 10 s
 \end{lstlisting}
-% TODO: testar.
 
 Na memória, o eBPF não substitui \texttt{free} ou \texttt{/proc/meminfo} para o uso total, mas mostra \textit{quem} aloca e quando. O \textit{tracepoint} \texttt{kmem:mm\_page\_alloc} conta alocações de páginas por processo, o \texttt{cachestat} informa acertos e falhas no \textit{page cache}, o \texttt{oomkill} registra processos mortos por falta de memória e o \texttt{memleak} aponta alocações que não foram liberadas em um processo:
 
 \begin{lstlisting}
 sudo bpftrace -e 'tracepoint:kmem:mm_page_alloc { @[comm] = count(); }'
-sudo cachestat-bpfcc 1 5
-sudo oomkill-bpfcc
-sudo memleak-bpfcc -p PID
+sudo cachestat-libbpf 1 5
+sudo oomkill-libbpf
+sudo memleak-libbpf -p PID
 \end{lstlisting}
-% TODO: testar.
 
 O \texttt{memleak} acrescenta custo ao processo observado, pois instrumenta cada alocação. Use-o por períodos curtos e fora de produção, quando possível.
 
@@ -65,11 +59,9 @@ O \texttt{memleak} acrescenta custo ao processo observado, pois instrumenta cada
 No disco, utilização é a fração do tempo em que o dispositivo está ocupado, saturação é a profundidade da fila e o erro mais relevante é a latência alta. Ferramentas como o \texttt{iostat} dão médias, que escondem a cauda: um disco com latência média de 1 ms pode ter requisições de 100 ms que travam uma aplicação. O \texttt{biolatency} mostra a distribuição completa em um histograma, e o \texttt{biosnoop} lista cada requisição de bloco, com processo, tamanho e latência:
 
 \begin{lstlisting}
-sudo biolatency-bpfcc -D 10 1   # histograma por disco, 1 amostra de 10 s
-sudo biosnoop-bpfcc             # cada requisicao de I/O
-sudo ext4slower-bpfcc 10        # operacoes do ext4 mais lentas que 10 ms
+sudo biolatency-libbpf -D 10 1   # histograma por disco, 1 amostra de 10 s
+sudo biosnoop-libbpf             # cada requisicao de I/O
 \end{lstlisting}
-% TODO: testar. O ext4slower depende do sistema de arquivos em uso.
 
 O mesmo histograma pode ser montado com \texttt{bpftrace}. O \textit{script} guarda o instante em que cada requisição é emitida e, quando ela termina, calcula a diferença. A chave do mapa combina dispositivo e setor, que identificam a requisição:
 
@@ -82,21 +74,23 @@ tracepoint:block:block_rq_complete /@inicio[args->dev, args->sector]/ {
     delete(@inicio[args->dev, args->sector]);
 }
 \end{lstlisting}
-% TODO: salvar como biolat.bt, rodar com sudo bpftrace biolat.bt e testar.
 
-A saída é um histograma em potências de dois, em microssegundos. Barras concentradas à esquerda indicam disco rápido, e uma cauda longa à direita indica pedidos esporádicos muito lentos.
+Salve o \textit{script} como \texttt{biolat.bt} e execute com \texttt{sudo bpftrace biolat.bt}. A saída é um histograma em potências de dois, em microssegundos. Barras concentradas à esquerda indicam disco rápido, e uma cauda longa à direita indica pedidos esporádicos muito lentos.
 
 \section{Monitoramento de aplicações}
 
-Para aplicações, o eBPF observa o que cruza o kernel, como conexões de rede, e, com sondas em espaço do usuário, o que acontece dentro do próprio programa (seção \ref{sec:uprobes}). Na rede, as ferramentas do BCC mostram o ciclo de vida das conexões TCP sem capturar pacotes:
+Para aplicações, o eBPF observa o que cruza o kernel, como conexões de rede, e, com sondas em espaço do usuário, o que acontece dentro do próprio programa (seção \ref{sec:uprobes}). Na rede, as ferramentas mostram o ciclo de vida das conexões TCP sem capturar pacotes:
 
 \begin{lstlisting}
-sudo tcpconnect-bpfcc          # conexoes ativas abertas, por processo
-sudo tcplife-bpfcc -L 8080     # duracao e bytes de cada conexao na porta local 8080
-sudo tcpretrans-bpfcc          # retransmissoes TCP
+sudo tcpconnect-libbpf          # conexoes abertas, por processo
+sudo tcplife-libbpf -L 8080     # duracao e bytes de cada conexao na porta local 8080
 \end{lstlisting}
-% TODO: testar. Gerar tráfego na porta 8080 (por exemplo, python3 -m http.server 8080) para o tcplife mostrar algo.
 
-O \texttt{tcplife} responde perguntas como quais clientes mantêm conexões longas com o serviço e quantos bytes cada uma trafegou. O \texttt{tcpretrans} aponta problemas de rede, e é um indício melhor de degradação do que a média de latência. Quando o dado necessário não está nessas ferramentas, a opção é escrever uma sonda própria, como a contagem de bytes por porta da seção \ref{sec:libbpf}.
+O \texttt{tcplife} responde perguntas como quais clientes mantêm conexões longas com o serviço e quantos bytes cada uma trafegou. Para gerar tráfego de teste, rode \texttt{python3 -m http.server 8080} em outro terminal e acesse a porta com o \texttt{curl}. As retransmissões TCP, um indício melhor de degradação da rede do que a média de latência, podem ser observadas com um \textit{tracepoint}:
 
-Diferente da instrumentação dentro da aplicação, a coleta com eBPF não exige alterar nem reiniciar o serviço, mas só enxerga o que o kernel vê. Eventos internos, como o tempo de uma consulta SQL, precisam de sondas \texttt{uprobe} ou USDT (capítulo \ref{cap:instrumentacao}).
+\begin{lstlisting}
+sudo bpftrace -e 'tracepoint:tcp:tcp_retransmit_skb {
+    printf("%s sport=%d dport=%d\n", comm, args->sport, args->dport); }'
+\end{lstlisting}
+
+Quando o dado necessário não está nessas ferramentas, a opção é escrever uma sonda própria, como a contagem de bytes por porta da seção \ref{sec:libbpf}. Diferente da instrumentação dentro da aplicação, a coleta com eBPF não exige alterar nem reiniciar o serviço, mas só enxerga o que o kernel vê. Eventos internos, como o tempo de uma consulta SQL, precisam de sondas \texttt{uprobe} ou USDT (capítulo \ref{cap:instrumentacao}).

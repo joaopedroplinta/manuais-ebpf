@@ -49,43 +49,42 @@ Ao transformar um mapa eBPF em métrica, a escolha do tipo segue o que o mapa gu
 
 O cuidado mais importante é a cardinalidade dos rótulos. Cada combinação de valores de rótulo cria uma série temporal nova. Usar o PID ou o endereço IP do cliente como rótulo pode gerar milhares de séries e sobrecarregar o Prometheus. Prefira rótulos de poucos valores, como a porta de serviço, e agregue o resto.
 
-O exemplo a seguir é um \textit{exporter} em Python que usa o BCC para contar bytes enviados por porta e o publica na porta 8000. O programa em C conta no kernel, e a classe \texttt{Coletor} lê o mapa a cada requisição do Prometheus:
+O exemplo a seguir é um \textit{exporter} em Python que lê o mapa \texttt{bytes\_por\_porta} do programa do capítulo \ref{cap:ferramentas}, já carregado no kernel, e o publica na porta 8000. A leitura usa o \texttt{bpftool}, que devolve o conteúdo do mapa em JSON, e a classe \texttt{Coletor} faz essa consulta a cada requisição do Prometheus:
 
 \begin{lstlisting}
-from bcc import BPF
-from prometheus_client import start_http_server
-from prometheus_client.core import CounterMetricFamily, REGISTRY
+import json
+import subprocess
 import time
 
-programa = """
-#include <net/sock.h>
-BPF_HASH(bytes, u16, u64);
+from prometheus_client import start_http_server
+from prometheus_client.core import CounterMetricFamily, REGISTRY
 
-int kprobe__tcp_sendmsg(struct pt_regs *ctx, struct sock *sk,
-                        struct msghdr *msg, size_t size)
-{
-    u16 porta = ntohs(sk->__sk_common.skc_dport);
-    bytes.increment(porta, size);
-    return 0;
-}
-"""
-b = BPF(text=programa)
+
+def ler_mapa(nome):
+    saida = subprocess.run(["bpftool", "-j", "map", "dump", "name", nome],
+                           capture_output=True, text=True, check=True).stdout
+    return json.loads(saida)
+
 
 class Coletor:
     def collect(self):
         m = CounterMetricFamily("ebpf_tcp_bytes_enviados",
                                 "Bytes enviados por porta de destino",
                                 labels=["porta"])
-        for chave, valor in b["bytes"].items():
-            m.add_metric([str(chave.value)], valor.value)
+        for entrada in ler_mapa("bytes_por_porta"):
+            f = entrada["formatted"]
+            m.add_metric([str(f["key"])], f["value"])
         yield m
+
 
 REGISTRY.register(Coletor())
 start_http_server(8000)
 while True:
     time.sleep(1)
 \end{lstlisting}
-% TODO: testar com sudo python3 exporter.py e curl localhost:8000/metrics. A biblioteca acrescenta _total ao nome do contador.
+% TODO: testar (rodada 3): sudo python3 exporter.py e curl localhost:8000/metrics. Confirmar o formato do JSON do bpftool ("formatted"). A biblioteca acrescenta _total ao nome do contador.
+
+Por não depender de compilação em tempo de execução, esse \textit{exporter} funciona em qualquer kernel que carregue o programa \texttt{libbpf}. O pacote \texttt{python3-prometheus-client} traz a biblioteca. O \textit{exporter} precisa rodar como \texttt{root}, porque o \texttt{bpftool} exige esse privilégio para ler mapas.
 
 Esse padrão, em que o mapa acumula no kernel e o \textit{exporter} só o lê sob demanda, evita o custo do \textit{polling} descrito no capítulo \ref{cap:introducao}: o espaço do usuário é acionado uma vez por intervalo de coleta, e não a cada evento.
 
