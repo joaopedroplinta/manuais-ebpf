@@ -86,7 +86,7 @@ while True:
     time.sleep(1)
 \end{lstlisting}
 
-O filtro \texttt{PORTAS} não é um detalhe. No teste deste manual, sem o filtro, o \textit{exporter} publicou 21 séries depois de apenas cinco requisições, quase todas de portas efêmeras de clientes (como 58674 ou 35098), cada uma com poucos bytes. Em um servidor real, esse número cresce a cada nova conexão. Com o filtro, só as portas listadas aparecem, uma série por porta. Para o servidor de teste na porta 8080, a série tem este formato:
+O filtro \texttt{PORTAS} não é um detalhe. No teste deste manual, sem o filtro, o \textit{exporter} publicou 21 séries depois de apenas cinco requisições, quase todas de portas efêmeras de clientes (como 58674 ou 35098), cada uma com poucos bytes. Em um servidor real, esse número cresce a cada nova conexão. Com o filtro, o mesmo teste publicou apenas três séries, uma para cada porta listada. Para o servidor de teste na porta 8080, a série tem este formato:
 
 \begin{lstlisting}
 # HELP ebpf_tcp_bytes_enviados_total Bytes enviados por porta de destino
