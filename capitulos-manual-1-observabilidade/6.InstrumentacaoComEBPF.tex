@@ -90,8 +90,7 @@ sudo bpftrace -e 'usdt:/usr/bin/python3.14:python:import__find__load__start {
     printf("%s\n", str(arg0)); }'
 \end{lstlisting}
 
-Em um teste, a saída listou os módulos na ordem em que o interpretador os carregou (\texttt{site}, \texttt{os}, \texttt{encodings} e outros). Em kernels muito recentes, o \texttt{bpftrace} pode imprimir avisos de compilação do \texttt{vmlinux.h} antes da saída. São inofensivos neste caso.
-% TODO: confirmar o exemplo da pausa do coletor de lixo (gc__start/gc__done) e a opcao --no-warnings (testes/06-painel-grafana.sh) e incluir no texto.
+Em um teste, a saída listou os módulos na ordem em que o interpretador os carregou (\texttt{site}, \texttt{os}, \texttt{encodings} e outros). No ambiente de teste (Ubuntu 26.04, kernel 7.0 e \texttt{bpftrace} 0.25.0), o \texttt{bpftrace} imprimiu, antes da saída, avisos de compilação vindos do \texttt{vmlinux.h} (\texttt{declaration does not declare anything}). São inofensivos, e a opção \texttt{--no-warnings} não os suprime. Além disso, um programa USDT de várias linhas, salvo em arquivo, fez o \texttt{bpftrace} abortar com \texttt{Assertion failed}, enquanto o mesmo programa escrito em uma única linha com \texttt{-e} funcionou. Nessa combinação de versões, prefira \textit{scripts} USDT de uma linha.
 
 Se o programa não traz sondas, a alternativa é o \textit{uprobe}, com a estabilidade menor descrita acima.
 

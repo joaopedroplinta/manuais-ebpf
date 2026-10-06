@@ -115,7 +115,7 @@ Um painel útil responde a perguntas, não exibe todas as métricas disponíveis
   \item \textbf{saturação}: latência da fila de execução da CPU e profundidade da fila de disco.
 \end{itemize}
 
-A Figura~\ref{fig:painel-grafana} mostra um painel montado com as métricas dos capítulos anteriores. O gráfico de tráfego usa o \textit{exporter} em Python do capítulo \ref{cap:ferramentas}, e os demais usam o \texttt{ebpf\_exporter}: a latência de disco (percentis 50 e 95), o mapa de calor da distribuição dessa latência e os cinco temporizadores do kernel mais frequentes. O painel foi montado a partir de quatro consultas PromQL, uma por quadro, e atualizado a cada 5 segundos.
+A Figura~\ref{fig:painel-grafana} mostra um painel montado com as métricas dos capítulos anteriores. O gráfico de tráfego usa o programa da seção \ref{sec:libbpf} e o \textit{exporter} em Python da seção \ref{sec:exportacao}, e os demais usam o \texttt{ebpf\_exporter}: a latência de disco (percentis 50 e 95), o mapa de calor da distribuição dessa latência e os cinco temporizadores do kernel mais frequentes. O painel foi montado a partir de quatro consultas PromQL, uma por quadro, e atualizado a cada 5 segundos.
 
 \begin{figure}[htb]
   \caption{Painel do Grafana com métricas coletadas por eBPF}
