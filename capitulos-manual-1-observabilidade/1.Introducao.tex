@@ -1,7 +1,35 @@
 \chapter{Introdução}
 
+Este manual apresenta o uso do eBPF (\textit{extended Berkeley Packet Filter}) para observabilidade em sistemas Linux. O texto é dirigido a quem já usa Linux no dia a dia, conhece o terminal e ferramentas como \texttt{top}, \texttt{ss} e \texttt{iostat}, mas ainda não escreveu ou executou programas eBPF. O objetivo é sair de \texttt{/proc} e das ferramentas de \textit{polling} e chegar a coletar métricas diretamente do kernel, entendendo o que cada peça faz e quanto ela custa.
+
 \section{O que é eBPF}
+
+O eBPF é uma tecnologia do kernel Linux que permite carregar e executar pequenos programas dentro do próprio kernel, sem alterar seu código-fonte e sem carregar módulos. Os programas são escritos em C restrito (ou em Rust), compilados para um \textit{bytecode} próprio e executados por uma máquina virtual embutida no kernel \cite{gregg2019,linuxkernel2024}. Cada programa fica associado a um evento, como a chamada de uma função do kernel, a chegada de um pacote ou a execução de uma chamada de sistema, e é executado toda vez que esse evento ocorre.
+
+A motivação aparece ao comparar com as ferramentas tradicionais de monitoramento. Sysstat e Prometheus, por exemplo, leem arquivos de \texttt{/proc} em intervalos fixos: a cada leitura o processo cruza a fronteira entre espaço do usuário e kernel, recebe os contadores em texto e faz o \textit{parsing}. Sob alta carga, esse ciclo disputa CPU com as aplicações que deveria apenas observar \cite{cassagnes2020}. Com eBPF, a agregação acontece no kernel, no momento do evento, e o espaço do usuário só lê o resultado quando precisa.
 
 \section{Arquitetura e funcionamento}
 
+Um programa eBPF passa por um ciclo fixo, do código-fonte à execução:
+
+\begin{enumerate}
+  \item o código em C é compilado com o \texttt{clang} para \textit{bytecode} eBPF, gerando um objeto ELF;
+  \item um programa em espaço do usuário, normalmente baseado na \texttt{libbpf}, carrega o objeto e o envia ao kernel pela chamada de sistema \texttt{bpf()};
+  \item o \textbf{verificador} analisa o \textit{bytecode} antes de qualquer execução e rejeita o programa se ele puder não terminar, acessar memória fora dos limites ou usar ponteiros sem checagem de nulo \cite{linuxkernel2024};
+  \item o compilador \textbf{JIT} traduz o \textit{bytecode} aprovado para instruções nativas do processador, de modo que o programa roda sem camada de interpretação \cite{gregg2019};
+  \item o programa é anexado a um ponto de ancoragem (\textit{hook}) e passa a ser executado a cada ocorrência do evento;
+  \item os resultados são gravados em \textbf{mapas eBPF}, estruturas de dados compartilhadas entre o kernel e o espaço do usuário.
+\end{enumerate}
+
+A máquina virtual possui onze registradores de 64 bits (\texttt{r0} a \texttt{r10}) e uma pilha de apenas 512 bytes por programa. Dados que precisam durar mais que uma execução, ou chegar ao espaço do usuário, vão para os mapas \cite{gregg2019}. O programa também não pode chamar funções arbitrárias do kernel, apenas as \textit{helper functions} liberadas para o seu tipo.
+
+Para acessar estruturas internas do kernel sem depender da versão em uso, o eBPF moderno usa o modelo CO-RE (\textit{Compile Once, Run Everywhere}). O kernel expõe a descrição de seus tipos no formato BTF, em \texttt{/sys/kernel/btf/vmlinux}, e a \texttt{libbpf} ajusta, no momento do carregamento, os deslocamentos dos campos acessados pelo programa \cite{nakryiko2020}. Assim, um mesmo binário compilado uma vez funciona em kernels diferentes, sem instalar compilador nem cabeçalhos na máquina de destino.
+
 \section{eBPF aplicado à observabilidade}
+
+Na observabilidade, o eBPF permite capturar eventos individuais com granularidade de microssegundos, como a latência de uma única conexão TCP ou a duração de uma chamada de sistema, sem instrumentar a aplicação e sem recompilar o kernel \cite{gregg2019}. Como a coleta é orientada a eventos, ela também enxerga ocorrências curtas que desaparecem entre duas amostras de uma ferramenta de \textit{polling} \cite{research2024}.
+
+O custo pode ser baixo. No experimento do trabalho de conclusão de curso que originou este material, o coletor eBPF consumiu em média 0,05\% de CPU com 100.000 mensagens, contra 4,66\% do Sysstat e 2,37\% do Prometheus.
+% TODO: confirmar se esse resultado pode ser citado (TCC ainda não está nas referências) e adicionar a citação.
+
+Isso não significa que o eBPF substitua as demais ferramentas. Ele exige um kernel recente (de preferência 5.8 ou superior), conhecimento mais especializado e cuidado com o desempenho: um programa anexado a uma função chamada milhões de vezes por segundo, com lógica pesada, pode degradar o host inteiro \cite{linuxkernel2024}. Os capítulos seguintes mostram como montar o ambiente, quais ferramentas usar e como levar as métricas coletadas até um painel.
