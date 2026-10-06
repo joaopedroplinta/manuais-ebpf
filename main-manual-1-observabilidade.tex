@@ -1,0 +1,74 @@
+\documentclass{ifpr-pinhais}
+
+\usepackage{amsmath}
+\usepackage{graphicx}
+\usepackage{latexsym}
+\usepackage{amssymb}
+\usepackage{placeins}
+\usepackage{listings}
+
+\graphicspath{{imagens/}}
+\lstset{basicstyle=\ttfamily\small,breaklines=true,frame=single,showstringspaces=false}
+
+% ---- Metadados do trabalho ----
+\curso{Bacharelado em Ciência da Computação}
+\departamento{Coordenação do Curso de Bacharelado em Ciência da Computação}
+\autor{Beatriz Regina Nahas \\ João Pedro dos Santos Henrique Plinta}
+\titulo{Manual 1 -- eBPF para Observabilidade}
+\tipotrabalho{Manual}
+\local{Pinhais}
+\data{2026}
+
+\orientador{Prof. Guilherme Werneck de Oliveira}
+
+\preambulo{%
+  Manual produzido no âmbito do projeto de extensão do minicurso
+  Introdução ao eBPF, apresentado à disciplina de Práticas de Extensão V,
+  do curso de Bacharelado em Ciência da Computação do \ifpr, \campus,
+  sob a orientação do professor Guilherme Werneck de Oliveira.
+}
+
+\makeatletter
+\hypersetup{
+  pdftitle={\@title},
+  pdfauthor={\@author},
+  pdfsubject={\imprimirpreambulo},
+  pdfcreator={LaTeX com abntex2 e ifpr-pinhais},
+  hidelinks,
+}
+\makeatother
+
+\setlength{\parskip}{0.1cm}
+
+\makeindex
+
+\begin{document}
+\frenchspacing
+
+\pretextual
+\imprimircapa
+\imprimirfolhaderosto{\folhaderosto}
+\pdfbookmark[0]{\contentsname}{toc}
+\tableofcontents*
+\cleardoublepage
+
+\textual
+\pagestyle{simple}
+
+\input{capitulos-manual-1-observabilidade/1.Introducao}
+\input{capitulos-manual-1-observabilidade/2.PreRequisitos}
+\input{capitulos-manual-1-observabilidade/3.FundamentosDeObservabilidade}
+\input{capitulos-manual-1-observabilidade/4.EBPFParaMonitoramento}
+\input{capitulos-manual-1-observabilidade/5.FerramentasDeObservabilidade}
+\input{capitulos-manual-1-observabilidade/6.InstrumentacaoComEBPF}
+\input{capitulos-manual-1-observabilidade/7.ColetaEVisualizacaoDeDados}
+\input{capitulos-manual-1-observabilidade/8.ExemplosPraticos}
+\input{capitulos-manual-1-observabilidade/9.Troubleshooting}
+\input{capitulos-manual-1-observabilidade/10.Conclusao}
+
+\postextual
+
+% Descomente quando houver \cite{} no texto:
+% \bibliography{referencias}
+
+\end{document}
