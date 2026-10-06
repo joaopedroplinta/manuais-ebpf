@@ -1,0 +1,15 @@
+*.aux
+*.log
+*.toc
+*.out
+*.bbl
+*.blg
+*.idx
+*.lof
+*.lot
+*.loq
+*.fls
+*.fdb_latexmk
+*.synctex.gz
+output.pdf
+main-manual-*.pdf
