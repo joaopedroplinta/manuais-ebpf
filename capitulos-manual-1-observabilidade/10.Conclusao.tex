@@ -1,3 +1,7 @@
-\chapter{Conclusão}
+\chapter{Conclusão}\label{cap:conclusao}
 
+Este manual percorreu o caminho de uma observação ao primeiro painel de observabilidade com eBPF. Partiu dos conceitos (capítulos \ref{cap:introducao} e \ref{cap:monitoramento}), passou pelas ferramentas e pelos mecanismos de instrumentação (capítulos \ref{cap:ferramentas} e \ref{cap:instrumentacao}) e terminou na exportação de métricas para o Prometheus e na visualização no Grafana (capítulo \ref{cap:coleta}). Os exemplos práticos do capítulo \ref{cap:exemplos} mostram que as ferramentas prontas, como \texttt{execsnoop}, \texttt{opensnoop}, \texttt{syscount} e \texttt{tcplife}, respondem à maior parte das perguntas de diagnóstico sem escrever código.
 
+O eBPF não substitui as ferramentas tradicionais. Ele complementa o \texttt{top}, o \texttt{iostat} e o Prometheus onde eles são mais fracos: eventos de curta duração, distribuições de latência em vez de médias e métricas por processo ou por conexão, coletadas sem alterar a aplicação. Em troca, exige \texttt{root}, um kernel recente e atenção ao custo de cada sonda, como o capítulo \ref{cap:troubleshooting} detalha.
+
+Os testes que sustentam os comandos deste manual estão na pasta \texttt{testes/} do repositório, com a saída de cada execução. Como os resultados dependem do kernel e das versões das ferramentas, o leitor deve repeti-los em seu próprio ambiente antes de tomar qualquer número como referência. Como próximos passos, os Manuais 2 e 3 desta série aplicam o mesmo conjunto de técnicas a segurança e a redes.
