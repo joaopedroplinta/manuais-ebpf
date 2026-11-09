@@ -24,6 +24,9 @@ Cada comando roda por poucos segundos e é encerrado com `SIGINT`. Os scripts cr
 | `04-ebpf-exporter-prometheus-grafana.sh` | `apt` em contêiner limpo, `ebpf_exporter`, Prometheus, Grafana | 2, 5, 7 | `docker`, internet |
 | `05-usdt-python.sh` | sondas USDT do `python3.14` | 6 | — |
 | `06-painel-grafana.sh` | sobe o painel de exemplo para tirar print; repete o USDT | 6, 7 | arquivos dos scripts 03 e 04 em `/tmp` |
+| `08-seguranca-exemplos.sh` | **Manual 2** (segurança): `execsnoop`, `opensnoop`, `tcpconnect` e programas bpftrace do cap. 9 | 9 (Manual 2) | `bpfcc-tools`, `bpftrace`, `strace` |
+
+O `08` pertence ao Manual 2, não ao Manual 1; ainda não foi executado (pendente de `sudo`), então os blocos do cap. 9 permanecem marcados com `% TODO: validar com sudo`.
 
 ## Resultados
 
