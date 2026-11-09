@@ -1,9 +1,272 @@
-\chapter{XDP — eXpress Data Path}
+\chapter{XDP --- \textit{eXpress Data Path}}
 
+O \textit{eXpress Data Path} (XDP) é o ponto de intervenção mais precoce
+disponível para programas eBPF na pilha de rede do kernel Linux \cite{linuxkernel2024}.
+Ao executar diretamente no driver da interface de rede --- antes da alocação do
+\texttt{sk\_buff} e antes de qualquer processamento pela pilha TCP/IP --- o XDP
+permite processar pacotes com latência mínima e overhead desprezível em comparação
+com abordagens em espaço de usuário \cite{cassagnes2020}.
+Em ambientes de funções virtualizadas de rede, onde o desempenho de encaminhamento
+e a capacidade de monitoramento sem intrusão são requisitos fundamentais, o XDP
+representa uma das contribuições mais relevantes do eBPF \cite{venancio2021}.
+
+% ----------------------------------------------------------------
 \section{Modos de execução}
+% ----------------------------------------------------------------
 
+O XDP suporta três modos de execução, que diferem em como o programa eBPF é
+integrado ao driver da interface de rede e, consequentemente, no desempenho
+e na compatibilidade obtidos \cite{linuxkernel2024}.
+
+\textbf{XDP Nativo (\textit{Native XDP}).}
+O programa eBPF é executado diretamente no contexto do driver da interface de rede,
+antes da alocação do \texttt{sk\_buff} \cite{linuxkernel2024}.
+Este modo oferece o melhor desempenho possível, pois elimina toda a sobrecarga
+de inicialização da pilha de rede para pacotes que serão descartados ou
+redirecionados.
+Requer suporte explícito no driver da interface de rede; a maioria dos drivers
+de alto desempenho --- como \texttt{mlx5}, \texttt{i40e}, \texttt{ixgbe} e
+\texttt{virtio\_net} --- já oferece esse suporte \cite{gregg2019}.
+
+\textbf{XDP Genérico (\textit{Generic XDP}).}
+Disponível em qualquer interface de rede, independentemente do suporte do driver
+\cite{linuxkernel2024}.
+Neste modo, o programa eBPF é executado após a alocação do \texttt{sk\_buff},
+dentro do núcleo da pilha de rede, o que significa que o overhead de alocação
+de memória já foi incorrido antes da execução do programa.
+O desempenho é inferior ao XDP nativo, mas este modo é útil para desenvolvimento,
+testes e implantação em interfaces sem suporte nativo, como as de máquinas
+virtuais mais simples \cite{gregg2020}.
+
+\textbf{XDP Offload (\textit{Offloaded XDP}).}
+O programa eBPF é compilado e carregado diretamente no firmware da placa de rede,
+que o executa sem qualquer envolvimento da CPU do host \cite{linuxkernel2024}.
+Este modo oferece o máximo de desempenho e a menor latência possível, pois o
+processamento ocorre inteiramente no hardware de rede.
+Atualmente, o suporte é limitado a um pequeno conjunto de placas de rede de alta
+performance com capacidade de processamento programável, como as da família
+Netronome Agilio \cite{gregg2019}.
+
+A verificação do modo suportado pela interface pode ser feita com:
+
+\begin{lstlisting}[language=bash,
+  caption={Verificação do modo XDP suportado pela interface de rede.}]
+ip link show eth0
+# Saida esperada para XDP nativo ativo:
+# xdp/id:42  <BROADCAST,MULTICAST,UP,LOWER_UP>
+\end{lstlisting}
+
+Para fins didáticos, o minicurso utiliza o modo genérico em máquinas virtuais,
+garantindo compatibilidade independentemente do driver de rede disponível
+\cite{plinta2026repo}.
+
+% ----------------------------------------------------------------
 \section{XDP e processamento de pacotes}
+% ----------------------------------------------------------------
 
+Um programa XDP recebe como argumento um ponteiro para a estrutura
+\texttt{struct xdp\_md}, que expõe os limites do buffer do pacote em memória
+\cite{linuxkernel2024}:
+
+\begin{lstlisting}[language=C,
+  caption={Estrutura de contexto de um programa XDP.}]
+struct xdp_md {
+    __u32 data;          /* inicio dos dados do pacote  */
+    __u32 data_end;      /* fim dos dados do pacote     */
+    __u32 data_meta;     /* area de metadados           */
+    __u32 ingress_ifindex;
+    __u32 rx_queue_index;
+};
+\end{lstlisting}
+
+O acesso aos bytes do pacote é feito por meio de ponteiros calculados a partir de
+\texttt{data} e \texttt{data\_end}.
+Toda operação de leitura ou escrita deve ser precedida de verificação explícita de
+limites, que o verificador do kernel valida estaticamente \cite{linuxkernel2024}:
+
+\begin{lstlisting}[language=C,
+  caption={Acesso seguro ao cabeçalho Ethernet em um programa XDP.}]
+void *data     = (void *)(long)ctx->data;
+void *data_end = (void *)(long)ctx->data_end;
+
+struct ethhdr *eth = data;
+if ((void *)(eth + 1) > data_end)
+    return XDP_PASS;   /* pacote muito curto; entregar a pilha */
+\end{lstlisting}
+
+Ao final do processamento, o programa retorna um código de ação que determina o
+destino do pacote \cite{linuxkernel2024}:
+
+\begin{itemize}
+  \item \textbf{\texttt{XDP\_PASS}} --- entrega o pacote à pilha de rede normal
+        do kernel para processamento convencional;
+  \item \textbf{\texttt{XDP\_DROP}} --- descarta o pacote imediatamente, sem
+        alocar \texttt{sk\_buff} nem percorrer a pilha TCP/IP; é a ação de menor
+        custo computacional e a preferida para mitigação de DDoS \cite{gregg2019};
+  \item \textbf{\texttt{XDP\_TX}} --- retransmite o pacote pela mesma interface
+        de entrada, possivelmente após modificação de cabeçalhos;
+  \item \textbf{\texttt{XDP\_REDIRECT}} --- encaminha o pacote para outra
+        interface de rede, para uma CPU diferente ou diretamente para um socket
+        em espaço de usuário via AF\_XDP \cite{linuxkernel2024};
+  \item \textbf{\texttt{XDP\_ABORTED}} --- indica erro de programa; o pacote é
+        descartado e um evento de rastreamento é gerado para depuração.
+\end{itemize}
+
+Para monitoramento de funções virtualizadas de rede, a ação \texttt{XDP\_PASS}
+combinada com coleta de métricas em mapas BPF é o padrão mais utilizado:
+o programa observa cada pacote --- contando bytes, registrando protocolos e
+medindo intervalos entre chegadas --- sem interferir no fluxo normal de dados
+\cite{venancio2021}.
+
+O exemplo a seguir demonstra um programa XDP de monitoramento que acumula bytes
+recebidos por protocolo IP em um mapa \texttt{PERCPU\_ARRAY} para exportação via
+Prometheus:
+
+\begin{lstlisting}[language=C,
+  caption={Programa XDP de monitoramento de bytes por protocolo L4.}]
+SEC("xdp")
+int monitor_bytes(struct xdp_md *ctx)
+{
+    void *data     = (void *)(long)ctx->data;
+    void *data_end = (void *)(long)ctx->data_end;
+
+    struct ethhdr *eth = data;
+    if ((void *)(eth + 1) > data_end)
+        return XDP_PASS;
+
+    if (eth->h_proto != bpf_htons(ETH_P_IP))
+        return XDP_PASS;
+
+    struct iphdr *ip = (void *)(eth + 1);
+    if ((void *)(ip + 1) > data_end)
+        return XDP_PASS;
+
+    __u32 proto  = ip->protocol;
+    __u32 nbytes = (void *)data_end - data;
+
+    __u64 *cnt = bpf_map_lookup_elem(&bytes_by_proto, &proto);
+    if (cnt)
+        *cnt += nbytes;
+
+    return XDP_PASS;
+}
+\end{lstlisting}
+
+% ----------------------------------------------------------------
 \section{Redirecionamento de pacotes}
+% ----------------------------------------------------------------
 
+O redirecionamento de pacotes com \texttt{XDP\_REDIRECT} é um dos casos de uso
+mais poderosos do XDP para funções virtualizadas de rede, pois permite implementar
+encaminhamento de alta velocidade inteiramente em eBPF, sem passar pela pilha
+de roteamento do kernel \cite{linuxkernel2024}.
+
+\textbf{Redirecionamento entre interfaces.}
+A \textit{helper function} \texttt{bpf\_redirect} encaminha o pacote para uma
+interface de saída identificada por seu índice (\texttt{ifindex}):
+
+\begin{lstlisting}[language=C,
+  caption={Redirecionamento de pacote para outra interface com XDP.}]
+SEC("xdp")
+int encaminhar(struct xdp_md *ctx)
+{
+    /* encaminha todos os pacotes para a interface de indice 3 */
+    return bpf_redirect(3, 0);
+}
+\end{lstlisting}
+
+Esse padrão é utilizado para implementar pontes (\textit{bridges}) e roteadores
+de alto desempenho em software, substituindo soluções baseadas em \textit{iptables}
+com ganhos expressivos de throughput \cite{gregg2019}.
+
+\textbf{Redirecionamento para socket AF\_XDP.}
+O AF\_XDP é uma família de sockets que permite que aplicações em espaço de usuário
+recebam pacotes diretamente do driver de rede, sem passar pela pilha TCP/IP,
+por meio de filas de memória compartilhada (\textit{UMEM}) entre kernel e espaço
+de usuário \cite{linuxkernel2024}.
+A \textit{helper function} \texttt{bpf\_redirect\_map} com um mapa do tipo
+\texttt{BPF\_MAP\_TYPE\_XSKMAP} é usada para selecionar quais pacotes são
+entregues a sockets AF\_XDP, enquanto os demais seguem o caminho normal com
+\texttt{XDP\_PASS}:
+
+\begin{lstlisting}[language=C,
+  caption={Redirecionamento seletivo de pacotes UDP para socket AF\_XDP.}]
+SEC("xdp")
+int xsk_redirect(struct xdp_md *ctx)
+{
+    /* ... parse dos cabecalhos ... */
+    if (ip->protocol == IPPROTO_UDP) {
+        __u32 idx = ctx->rx_queue_index;
+        return bpf_redirect_map(&xsk_map, idx, XDP_PASS);
+    }
+    return XDP_PASS;
+}
+\end{lstlisting}
+
+Em ambientes NFV, o AF\_XDP é utilizado por funções de rede que precisam processar
+pacotes em espaço de usuário com latência próxima ao kernel --- como firewalls e
+balanceadores de carga implementados em \textit{Data Plane Development Kit} (DPDK)
+--- mas com a vantagem de interoperabilidade com a pilha de rede padrão do Linux
+para o tráfego não selecionado \cite{venancio2021}.
+
+% ----------------------------------------------------------------
 \section{Vantagens e limitações}
+% ----------------------------------------------------------------
+
+\textbf{Vantagens.}
+
+\textbf{Desempenho.}
+O XDP nativo é a abordagem de maior desempenho para processamento de pacotes em
+software no Linux, superando soluções baseadas em \textit{iptables} e em módulos
+de kernel convencionais em cenários de alta taxa de pacotes \cite{cassagnes2020}.
+A ausência de alocação de \texttt{sk\_buff} para pacotes descartados ou
+redirecionados elimina o principal gargalo de memória da pilha de rede em cargas
+de trabalho de filtragem \cite{gregg2019}.
+
+\textbf{Programabilidade dinâmica.}
+Programas XDP podem ser carregados e substituídos em tempo de execução sem
+interromper o tráfego de rede, ao contrário de filtros estáticos de
+\textit{iptables} que exigem reinicialização do serviço de firewall
+\cite{linuxkernel2024}.
+Mapas BPF compartilhados entre o programa e o espaço de usuário permitem atualizar
+configurações --- listas de endereços bloqueados, tabelas de roteamento,
+limiares de monitoramento --- sem recarregar o programa \cite{gregg2020}.
+
+\textbf{Visibilidade sem intrusão.}
+A ação \texttt{XDP\_PASS} permite que programas XDP observem todo o tráfego de
+uma interface e coletem métricas detalhadas sem alterar o comportamento da rede
+--- propriedade fundamental para monitoramento de funções virtualizadas de rede
+em produção \cite{venancio2021}.
+
+\textbf{Limitações.}
+
+\textbf{Acesso restrito ao contexto do pacote.}
+No modo nativo, o programa XDP tem acesso apenas aos bytes do pacote via
+\texttt{xdp\_md} --- sem acesso a metadados de cgroup, namespace ou PID do
+processo originador, que só estão disponíveis em \textit{hooks} posteriores na
+pilha, como o TC \cite{linuxkernel2024}.
+Para monitoramento que exige associação de fluxos de rede a funções virtualizadas
+específicas, o TC ou \textit{tracepoints} de socket oferecem visibilidade mais rica.
+
+\textbf{Suporte limitado de drivers.}
+O XDP nativo requer suporte explícito no driver da interface de rede
+\cite{linuxkernel2024}.
+Em ambientes de máquina virtual com drivers paravirtualizados menos comuns, pode
+ser necessário recorrer ao XDP genérico, com desempenho inferior
+\cite{gregg2020}.
+
+\textbf{Ausência de estado de conexão.}
+O XDP opera pacote a pacote e não mantém estado de conexão nativo
+\cite{linuxkernel2024}.
+Casos de uso que exigem rastreamento de fluxos TCP --- como detecção de
+retransmissões ou medição de RTT --- precisam manter esse estado explicitamente
+em mapas BPF, com o cuidado adicional de gerenciar a expiração de entradas para
+evitar esgotamento de memória \cite{gregg2019}.
+
+\textbf{Restrições do verificador.}
+Como todo programa eBPF, programas XDP estão sujeitos às restrições do verificador
+--- limite de complexidade de laços, verificação obrigatória de limites de acesso
+a memória e ausência de recursão \cite{linuxkernel2024}.
+Lógica de processamento muito complexa pode não ser verificável e precisar ser
+distribuída entre múltiplos programas encadeados via \textit{tail calls}
+\cite{gregg2019}.

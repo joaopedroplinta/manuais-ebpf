@@ -1,9 +1,389 @@
-\chapter{Observabilidade de Rede}
+\chapter{OBSERVABILIDADE DE REDE}
 
-\section{Monitoramento de interfaces, pacotes e conexões}
+A observabilidade de rede com eBPF consiste em instrumentar a pilha de comunicação
+do kernel para coletar métricas de desempenho, eventos de conexão e fluxos de tráfego
+com granularidade por processo, por cgroup e por interface — sem modificar as aplicações
+monitoradas e sem gerar tráfego adicional de sonda (GREGG, 2019). Em ambientes de
+funções virtualizadas de rede, essa capacidade é especialmente relevante: múltiplas
+funções compartilham o mesmo host físico, e distinguir o comportamento de rede de cada
+uma delas exige associar métricas ao contexto de execução de cada função (VENÂNCIO
+et al., 2021).
 
-\section{Latência}
+A cadeia de observabilidade adotada no minicurso combina programas eBPF no kernel
+— anexados a hooks XDP, TC ou tracepoints de socket — com o \texttt{ebpf\_exporter}
+(Cloudflare, s.d.) para leitura periódica dos mapas BPF e exposição das métricas no
+formato Prometheus (Prometheus Authors, s.d.), visualizadas em dashboards Grafana
+(Grafana Labs, s.d.) (ALVES; PLINTA, 2026).
 
-\section{Throughput}
+\section{MONITORAMENTO DE INTERFACES, PACOTES E CONEXÕES}
 
-\section{Network flows}
+O monitoramento de interfaces, pacotes e conexões com eBPF abrange três dimensões
+complementares: contadores agregados por interface, inspeção por pacote e rastreamento
+de eventos de ciclo de vida de conexões (Linux Kernel Documentation, 2024).
+
+\subsection*{Contadores por interface}
+
+Contadores de bytes e pacotes por interface de rede podem ser acumulados em mapas
+\texttt{BPF\_MAP\_TYPE\_PERCPU\_ARRAY} por programas XDP ou TC \textit{ingress},
+eliminando o custo de leitura periódica do sistema de arquivos \texttt{/proc/net/dev}
+e oferecendo resolução temporal superior à do intervalo de coleta do \texttt{sysstat}
+(GODARD; Sysstat Contributors, 2024). O exemplo a seguir demonstra um programa XDP
+que acumula contadores de pacotes e bytes por interface de entrada:
+
+\begin{lstlisting}[caption={Listing 6.1 – Contadores de pacotes e bytes por interface com XDP.}, label=lst:obs-iface]
+#include <linux/bpf.h>
+#include <bpf/bpf_helpers.h>
+
+struct iface_stats {
+    __u64 packets;
+    __u64 bytes;
+};
+
+struct {
+    __uint(type, BPF_MAP_TYPE_PERCPU_ARRAY);
+    __uint(max_entries, 1);
+    __type(key, __u32);
+    __type(value, struct iface_stats);
+} iface_counters SEC(".maps");
+
+SEC("xdp")
+int contar_pacotes(struct xdp_md *ctx)
+{
+    __u32 key = 0;
+    struct iface_stats *s =
+        bpf_map_lookup_elem(&iface_counters, &key);
+    if (s) {
+        s->packets++;
+        s->bytes += ctx->data_end - ctx->data;
+    }
+    return XDP_PASS;
+}
+
+char LICENSE[] SEC("license") = "GPL";
+\end{lstlisting}
+
+A leitura dos valores por CPU e sua consolidação são realizadas pela aplicação em
+espaço de usuário, somando as entradas de todas as CPUs antes de exportar a métrica
+ao Prometheus (GREGG, 2020).
+
+\subsection*{Inspeção por pacote}
+
+A inspeção por pacote no nível do TC \textit{ingress} oferece granularidade de
+protocolo, porta e endereço IP, permitindo construir histogramas de distribuição de
+tamanho de pacote ou contadores por par de endereços sem gerar tráfego de captura
+adicional (CASSAGNES et al., 2020). O \texttt{bpftrace} permite realizar essa inspeção
+interativamente sem escrever um programa eBPF completo:
+
+\begin{lstlisting}[caption={Listing 6.2 – Histograma de tamanho de pacotes TCP com bpftrace.}, label=lst:obs-pkt-hist]
+sudo bpftrace -e '
+tracepoint:net:netif_receive_skb
+{
+    @tamanho = hist(args->len);
+}
+interval:s:5 { print(@tamanho); clear(@tamanho); }
+'
+\end{lstlisting}
+
+\subsection*{Rastreamento de eventos de conexão}
+
+O rastreamento do ciclo de vida de conexões TCP — abertura, encerramento e
+retransmissão — é realizado por meio de tracepoints de socket e kprobes sobre funções
+internas do kernel como \texttt{tcp\_connect} e \texttt{tcp\_close} (Linux Kernel
+Documentation, 2024). A ferramenta \texttt{tcpconnect-bpfcc} do BCC (IO Visor
+Project, s.d.) ilustra esse padrão, exibindo em tempo real cada nova conexão TCP com
+PID, comando, endereço e porta:
+
+\begin{lstlisting}[caption={Listing 6.3 – Monitoramento de novas conexões TCP com tcpconnect-bpfcc.}, label=lst:obs-tcpconnect]
+sudo tcpconnect-bpfcc -t
+\end{lstlisting}
+
+Para monitoramento de encerramento de conexões e coleta de estatísticas acumuladas
+por fluxo — como bytes transferidos e número de retransmissões — o padrão de
+implementação utiliza um mapa \texttt{BPF\_MAP\_TYPE\_HASH} indexado pela tupla de
+quatro elementos do fluxo (endereço de origem, endereço de destino, porta de origem,
+porta de destino), atualizado em tracepoints de envio e recepção e lido no encerramento
+da conexão (GREGG, 2019).
+
+\section{LATÊNCIA}
+
+A medição de latência de rede com eBPF é realizada de forma passiva — sem geração
+de tráfego de sonda — por meio da instrumentação de tracepoints e kprobes no caminho
+de envio e recepção de pacotes no kernel (RESEARCH, 2024). As principais métricas de
+latência acessíveis são o RTT (\textit{round-trip time}) estimado pelo TCP e a latência
+de enfileiramento no subsistema de TC.
+
+\subsection*{RTT passivo por conexão TCP}
+
+O kernel Linux mantém uma estimativa de RTT por socket TCP, atualizada a cada
+confirmação recebida (\textit{ACK}). Essa estimativa é acessível via o campo
+\texttt{srtt\_us} da estrutura \texttt{tcp\_sock}, que pode ser lido por programas eBPF
+anexados ao tracepoint \texttt{tcp:tcp\_probe} ou à kprobe \texttt{tcp\_rcv\_established}
+(Linux Kernel Documentation, 2024). O exemplo a seguir utiliza o \texttt{bpftrace} para
+construir um histograma de RTT por endereço de destino:
+
+\begin{lstlisting}[caption={Listing 6.4 – Histograma de RTT TCP passivo com bpftrace.}, label=lst:obs-rtt]
+sudo bpftrace -e '
+tracepoint:tcp:tcp_probe
+{
+    /* srtt_us esta em microssegundos, dividido por 8 (media movel) */
+    @rtt_us[args->daddr] = hist(args->srtt >> 3);
+}
+interval:s:10 { print(@rtt_us); clear(@rtt_us); }
+'
+\end{lstlisting}
+
+Em ambientes NFV, a medição passiva de RTT por cgroup permite identificar degradação
+de latência introduzida por funções virtualizadas de rede sem instrumentar as próprias
+funções (VENÂNCIO et al., 2021). O programa de monitoramento associa o identificador
+de cgroup ao socket no momento da criação da conexão — via o hook
+\texttt{BPF\_PROG\_TYPE\_CGROUP\_SOCK} — e propaga esse identificador como chave do
+mapa de histogramas de RTT (CASSAGNES et al., 2020).
+
+\subsection*{Latência de enfileiramento no TC}
+
+A latência introduzida pelo subsistema de TC — tempo entre a chegada do pacote à
+\textit{qdisc} e sua entrega ao driver — pode ser medida registrando o timestamp de
+entrada com \texttt{bpf\_ktime\_get\_ns} em um programa TC \textit{ingress} e calculando
+o delta em um programa TC \textit{egress} ou em um tracepoint de transmissão (Linux
+Kernel Documentation, 2024). Essa métrica é particularmente relevante em ambientes
+com \textit{policing} ativo, onde o enfileiramento pode introduzir latência adicional
+não prevista pelas funções de rede (GREGG, 2019).
+
+\begin{lstlisting}[caption={Listing 6.5 – Medição de latência de enfileiramento com timestamp BPF.}, label=lst:obs-qdelay]
+#include <linux/bpf.h>
+#include <linux/pkt_cls.h>
+#include <bpf/bpf_helpers.h>
+
+struct {
+    __uint(type, BPF_MAP_TYPE_HASH);
+    __uint(max_entries, 65536);
+    __type(key, __u32);    /* hash do fluxo */
+    __type(value, __u64);  /* timestamp de entrada */
+} ts_ingress SEC(".maps");
+
+SEC("tc_ingress")
+int marca_timestamp(struct __sk_buff *skb)
+{
+    __u32 key = skb->hash;
+    __u64 ts  = bpf_ktime_get_ns();
+    bpf_map_update_elem(&ts_ingress, &key, &ts, BPF_ANY);
+    return TC_ACT_OK;
+}
+
+SEC("tc_egress")
+int mede_latencia(struct __sk_buff *skb)
+{
+    __u32 key = skb->hash;
+    __u64 *ts = bpf_map_lookup_elem(&ts_ingress, &key);
+    if (ts) {
+        __u64 delta = bpf_ktime_get_ns() - *ts;
+        bpf_printk("latencia_fila_ns=%llu", delta);
+        bpf_map_delete_elem(&ts_ingress, &key);
+    }
+    return TC_ACT_OK;
+}
+
+char LICENSE[] SEC("license") = "GPL";
+\end{lstlisting}
+
+Em produção, a saída de \texttt{bpf\_printk} é substituída por acumulação em um
+mapa de histograma \texttt{BPF\_MAP\_TYPE\_PERCPU\_ARRAY}, lido periodicamente pelo
+\texttt{ebpf\_exporter} para exportação ao Prometheus (Cloudflare, s.d.).
+
+\section{THROUGHPUT}
+
+O monitoramento de \textit{throughput} com eBPF consiste em acumular bytes
+transmitidos e recebidos por unidade de tempo, com granularidade configurável — por
+interface, por fluxo, por processo ou por cgroup — sem dependência de ferramentas de
+captura de pacotes em espaço de usuário (GREGG, 2020).
+
+\subsection*{Throughput por interface}
+
+O \textit{throughput} agregado por interface é obtido acumulando o campo
+\texttt{skb->len} em mapas \texttt{BPF\_MAP\_TYPE\_PERCPU\_ARRAY} em programas XDP
+ou TC e calculando a taxa de transferência na aplicação em espaço de usuário como a
+variação do contador entre leituras consecutivas (Linux Kernel Documentation, 2024).
+O \texttt{bpftrace} permite verificar rapidamente o \textit{throughput} de entrada de
+uma interface sem carregar um programa eBPF dedicado:
+
+\begin{lstlisting}[caption={Listing 6.6 – Throughput de entrada por interface com bpftrace.}, label=lst:obs-throughput-iface]
+sudo bpftrace -e '
+tracepoint:net:netif_receive_skb
+/str(args->name) == "eth0"/
+{
+    @bytes_in = sum(args->len);
+}
+interval:s:1
+{
+    printf("throughput_in: %llu bytes/s\n", @bytes_in);
+    clear(@bytes_in);
+}
+'
+\end{lstlisting}
+
+\subsection*{Throughput por fluxo e por cgroup}
+
+Para monitoramento de \textit{throughput} com granularidade por fluxo, o mapa
+\texttt{BPF\_MAP\_TYPE\_HASH} indexado pela tupla de quatro elementos do fluxo é
+atualizado em cada pacote com a quantidade de bytes carregados (GREGG, 2019). Em
+ambientes NFV, a mesma métrica é indexada pelo identificador de cgroup da função
+virtualizada, obtido via \texttt{bpf\_skb\_cgroup\_id} no TC \textit{egress}, permitindo
+construir séries temporais de \textit{throughput} por função sem instrumentar as
+próprias funções (VENÂNCIO et al., 2021):
+
+\begin{lstlisting}[caption={Listing 6.7 – Throughput por cgroup no TC egress.}, label=lst:obs-throughput-cgroup]
+#include <linux/bpf.h>
+#include <linux/pkt_cls.h>
+#include <bpf/bpf_helpers.h>
+
+struct {
+    __uint(type, BPF_MAP_TYPE_HASH);
+    __uint(max_entries, 1024);
+    __type(key, __u64);    /* cgroup id */
+    __type(value, __u64);  /* bytes acumulados */
+} bytes_por_cgroup SEC(".maps");
+
+SEC("tc_egress")
+int throughput_egress(struct __sk_buff *skb)
+{
+    __u64 cgid    = bpf_skb_cgroup_id(skb);
+    __u64 nbytes  = skb->len;
+    __u64 *cnt    = bpf_map_lookup_elem(&bytes_por_cgroup, &cgid);
+
+    if (cnt) {
+        __sync_fetch_and_add(cnt, nbytes);
+    } else {
+        bpf_map_update_elem(&bytes_por_cgroup, &cgid,
+                            &nbytes, BPF_ANY);
+    }
+
+    return TC_ACT_OK;
+}
+
+char LICENSE[] SEC("license") = "GPL";
+\end{lstlisting}
+
+A taxa de transferência é calculada na aplicação em espaço de usuário — ou pelo
+\texttt{ebpf\_exporter} — como a diferença entre leituras consecutivas do mapa,
+dividida pelo intervalo de coleta (Cloudflare, s.d.).
+
+\section{NETWORK FLOWS}
+
+Um \textit{network flow} é definido como um conjunto de pacotes que compartilham
+os mesmos endereços IP de origem e destino, portas e protocolo de transporte durante
+um intervalo de tempo — a tupla de cinco elementos que identifica unicamente uma
+conexão na pilha TCP/IP (GREGG, 2019). O rastreamento de fluxos com eBPF permite
+construir um inventário completo das comunicações de rede de um host, associando cada
+fluxo ao processo e ao cgroup responsável, sem depender de ferramentas de captura em
+espaço de usuário (CASSAGNES et al., 2020).
+
+\subsection*{Tabela de fluxos ativos}
+
+A tabela de fluxos ativos é mantida em um mapa \texttt{BPF\_MAP\_TYPE\_HASH}
+cujas chaves são structs representando a tupla do fluxo e cujos valores acumulam
+métricas por fluxo — bytes, pacotes, timestamps de início e de última atividade (Linux
+Kernel Documentation, 2024). Programas TC \textit{ingress} e \textit{egress} inserem
+ou atualizam entradas nessa tabela a cada pacote; tracepoints de \texttt{tcp\_close} e
+\texttt{udp\_destroy\_sock} removem a entrada ao encerrar o fluxo e emitem o registro
+final via \texttt{BPF\_MAP\_TYPE\_RINGBUF}:
+
+\begin{lstlisting}[caption={Listing 6.8 – Estruturas de chave e valor para tabela de fluxos ativos.}, label=lst:obs-flow-structs]
+#include <linux/bpf.h>
+#include <bpf/bpf_helpers.h>
+
+struct flow_key {
+    __u32 src_ip;
+    __u32 dst_ip;
+    __u16 src_port;
+    __u16 dst_port;
+    __u8  protocol;
+    __u8  pad[3];
+};
+
+struct flow_stats {
+    __u64 bytes;
+    __u64 packets;
+    __u64 ts_start;   /* bpf_ktime_get_ns no primeiro pacote */
+    __u64 ts_last;    /* bpf_ktime_get_ns no ultimo pacote   */
+    __u64 cgid;       /* cgroup id do processo originador    */
+};
+
+struct {
+    __uint(type, BPF_MAP_TYPE_HASH);
+    __uint(max_entries, 65536);
+    __type(key, struct flow_key);
+    __type(value, struct flow_stats);
+} flow_table SEC(".maps");
+\end{lstlisting}
+
+\subsection*{Exportação de fluxos encerrados}
+
+Ao encerrar um fluxo TCP, a entrada correspondente na tabela é lida, copiada para
+um evento no \texttt{BPF\_MAP\_TYPE\_RINGBUF} e removida do mapa, liberando espaço
+para novos fluxos (Linux Kernel Documentation, 2024). A aplicação em espaço de
+usuário consome esses eventos e os encaminha a um coletor compatível com o formato
+IPFIX ou ao Prometheus para análise histórica (GREGG, 2020):
+
+\begin{lstlisting}[caption={Listing 6.9 – Emissão de registro de fluxo encerrado via ringbuf.}, label=lst:obs-flow-close]
+#include <linux/bpf.h>
+#include <bpf/bpf_helpers.h>
+
+/* Reaproveitando flow_key e flow_stats do Listing 6.8 */
+
+struct {
+    __uint(type, BPF_MAP_TYPE_RINGBUF);
+    __uint(max_entries, 1 << 20);
+} flow_events SEC(".maps");
+
+SEC("tracepoint/tcp/tcp_destroy_sock")
+int registrar_fluxo_encerrado(struct trace_event_raw_tcp_event_sk *ctx)
+{
+    struct flow_key key = {};
+    key.src_ip   = ctx->saddr;
+    key.dst_ip   = ctx->daddr;
+    key.src_port = ctx->sport;
+    key.dst_port = ctx->dport;
+    key.protocol = IPPROTO_TCP;
+
+    struct flow_stats *fs =
+        bpf_map_lookup_elem(&flow_table, &key);
+    if (!fs)
+        return 0;
+
+    struct flow_stats *ev =
+        bpf_ringbuf_reserve(&flow_events, sizeof(*ev), 0);
+    if (ev) {
+        *ev = *fs;
+        bpf_ringbuf_submit(ev, 0);
+    }
+
+    bpf_map_delete_elem(&flow_table, &key);
+    return 0;
+}
+
+char LICENSE[] SEC("license") = "GPL";
+\end{lstlisting}
+
+\subsection*{Visualização com bpftrace}
+
+Para investigação interativa de fluxos ativos sem carregar um programa eBPF dedicado,
+o \texttt{bpftrace} oferece acesso direto aos tracepoints de socket (bpftrace Contributors,
+s.d.):
+
+\begin{lstlisting}[caption={Listing 6.10 – Listagem de novas conexões TCP com origem e destino via bpftrace.}, label=lst:obs-flow-bpftrace]
+sudo bpftrace -e '
+tracepoint:tcp:tcp_connect
+{
+    printf("%-6d %-16s %s:%d -> %s:%d\n",
+           pid, comm,
+           ntop(args->saddr), args->sport,
+           ntop(args->daddr), args->dport);
+}
+'
+\end{lstlisting}
+
+Em ambientes NFV, a tabela de fluxos eBPF substitui com vantagens o monitoramento
+baseado em \texttt{/proc/net/tcp} — que exige leitura e análise de um arquivo de texto
+por intervalo de coleta — fornecendo eventos de fluxo em tempo real com associação
+direta ao cgroup da função virtualizada responsável e sem custo adicional de análise
+sintática (VENÂNCIO et al., 2021).

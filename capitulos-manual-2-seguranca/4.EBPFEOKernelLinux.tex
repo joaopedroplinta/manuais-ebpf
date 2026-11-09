@@ -1,11 +1,232 @@
 \chapter{eBPF e o Kernel Linux}
 
+O eBPF transformou a maneira como programas interagem com o kernel Linux ao
+introduzir um modelo de extensão seguro, dinâmico e sem necessidade de modificar
+ou recompilar o kernel \cite{linuxkernel2024}.
+Este capítulo descreve os mecanismos internos que tornam isso possível: a forma
+como programas eBPF são carregados e executados, os pontos em que se ancoram ao
+kernel, o processo de verificação de segurança e as estruturas de dados compartilhadas
+entre kernel e espaço de usuário.
+
+% ----------------------------------------------------------------
 \section{Interação com o kernel}
+% ----------------------------------------------------------------
 
+Tradicionalmente, estender o comportamento do kernel Linux exigia a escrita de
+módulos (\textit{kernel modules}), que operam com privilégios plenos e sem
+qualquer verificação prévia de segurança — uma falha em um módulo pode travar
+todo o sistema \cite{gregg2020}.
+O eBPF oferece uma alternativa radicalmente diferente: programas são carregados
+em tempo de execução via a chamada de sistema \texttt{bpf(2)}, submetidos a
+verificação estática e, só então, executados no espaço do kernel em resposta
+a eventos específicos \cite{linuxkernel2024}.
+
+O fluxo de interação segue, de forma geral, as seguintes etapas:
+
+\begin{enumerate}
+  \item O desenvolvedor escreve o programa eBPF em C restrito e o compila com
+        \texttt{clang}/\texttt{llvm} para \textit{bytecode} BPF
+        \cite{nakryiko2020};
+  \item A aplicação em espaço de usuário carrega o \textit{bytecode} no kernel
+        via \texttt{bpf(2)}, passando-o pelo verificador;
+  \item O compilador JIT (\textit{Just-In-Time}) do kernel traduz o
+        \textit{bytecode} para instruções nativas da arquitetura do processador,
+        eliminando a sobrecarga de interpretação \cite{linuxkernel2024};
+  \item O programa é anexado a um \textit{hook} e passa a ser executado cada vez
+        que o evento correspondente ocorre;
+  \item Resultados são comunicados ao espaço de usuário por meio de mapas BPF
+        ou do subsistema \texttt{perf} \cite{gregg2019}.
+\end{enumerate}
+
+A biblioteca libbpf \cite{libbpf} abstrai grande parte dessa interação,
+oferecendo uma API em C que cuida do carregamento, verificação e anexação de
+programas, além de implementar o BPF CO-RE (\textit{Compile Once -- Run
+Everywhere}), que garante portabilidade do mesmo binário entre diferentes versões
+do kernel \cite{nakryiko2020}.
+
+% ----------------------------------------------------------------
 \section{Hooks}
+% ----------------------------------------------------------------
 
+Um \textit{hook} é o ponto do kernel ao qual um programa eBPF é anexado e a
+partir do qual é disparado \cite{linuxkernel2024}.
+A escolha do \textit{hook} determina quais informações estarão disponíveis para
+o programa e quais ações ele poderá executar.
+Os principais tipos são descritos a seguir.
+
+\textbf{\textit{Tracepoints}.}
+Pontos de rastreamento estáticos inseridos pelos próprios mantenedores do kernel
+em locais estratégicos — entrada e saída de chamadas de sistema, eventos de
+escalonamento, operações de bloco e rede, entre outros.
+Por serem parte da ABI estável do kernel, não são removidos ou renomeados entre
+versões, tornando-os a opção mais robusta para uso em produção \cite{gregg2019}.
+
+\textbf{\textit{Kprobes} e \textit{kretprobes}.}
+Sondas dinâmicas que podem ser inseridas no início (\textit{kprobe}) ou no
+retorno (\textit{kretprobe}) de qualquer função do kernel, inclusive aquelas
+sem \textit{tracepoint} estático \cite{gregg2020}.
+Oferecem máxima cobertura, mas dependem de nomes de funções que podem mudar
+entre versões do kernel.
+
+\textbf{\textit{Uprobes} e \textit{uretprobes}.}
+Equivalente das \textit{kprobes} para funções em espaço de usuário.
+Permitem rastrear chamadas em bibliotecas compartilhadas (como \texttt{libc} ou
+\texttt{OpenSSL}) e aplicações sem modificá-las nem recompilá-las
+\cite{bpftrace}.
+
+\textbf{XDP (\textit{eXpress Data Path}).}
+\textit{Hook} de rede executado no driver da interface de rede, antes que o pacote
+seja entregue à pilha de rede do kernel.
+É o ponto de intervenção mais cedo e de menor latência disponível para
+processamento de pacotes, utilizado em filtragem, balanceamento de carga e
+mitigação de DDoS \cite{linuxkernel2024}.
+
+\textbf{TC (\textit{Traffic Control}).}
+\textit{Hook} na camada de controle de tráfego do kernel, após o processamento
+de camada 2 mas antes da entrega à aplicação.
+Oferece mais contexto sobre o pacote do que XDP, ao custo de execução um pouco
+mais tardia na pilha \cite{gregg2019}.
+
+\textbf{LSM (\textit{Linux Security Module}).}
+\textit{Hooks} de segurança utilizados por mecanismos como SELinux e AppArmor,
+disponíveis para eBPF a partir do kernel 5.7.
+Permitem criar políticas de controle de acesso programáveis que podem bloquear
+operações antes de sua conclusão \cite{linuxkernel2024}.
+
+% ----------------------------------------------------------------
 \section{Programas eBPF}
+% ----------------------------------------------------------------
 
+Um programa eBPF é escrito em um subconjunto restrito de C — sem chamadas de
+função arbitrárias, sem recursão, sem laços com número de iterações
+indeterminado — e compilado para um conjunto de instruções de 64 bits chamado
+\textit{BPF bytecode} \cite{linuxkernel2024}.
+Cada instrução opera sobre onze registradores de 64 bits (\texttt{r0}--\texttt{r10}),
+sendo \texttt{r10} um ponteiro somente leitura para o topo da pilha do programa
+e \texttt{r0} o registrador de valor de retorno \cite{gregg2019}.
+
+Os programas são organizados em tipos, e o tipo determina o \textit{hook}
+compatível, o contexto passado como argumento e as operações permitidas.
+A Tabela~\ref{tab:bpf-types} apresenta os principais tipos e suas aplicações.
+
+\begin{table}[ht]
+\centering
+\caption{Principais tipos de programas eBPF e suas aplicações.}
+\label{tab:bpf-types}
+\begin{tabular}{lll}
+\toprule
+\textbf{Tipo}              & \textbf{Hook}              & \textbf{Aplicação típica}       \\
+\midrule
+\texttt{BPF\_PROG\_TYPE\_TRACEPOINT}   & Tracepoints          & Rastreamento de eventos         \\
+\texttt{BPF\_PROG\_TYPE\_KPROBE}       & Kprobes/uprobes      & Sondagem de funções             \\
+\texttt{BPF\_PROG\_TYPE\_XDP}          & Driver de rede       & Filtragem de pacotes            \\
+\texttt{BPF\_PROG\_TYPE\_SCHED\_CLS}   & TC                   & Controle de tráfego             \\
+\texttt{BPF\_PROG\_TYPE\_LSM}          & Hooks LSM            & Controle de acesso              \\
+\texttt{BPF\_PROG\_TYPE\_PERF\_EVENT}  & Perf events          & Profiling e monitoramento       \\
+\bottomrule
+\end{tabular}
+\fonte{Adaptado de \citeonline{linuxkernel2024}.}
+\end{table}
+
+Programas eBPF podem chamar um conjunto curado de funções auxiliares do kernel
+— as \textit{BPF helper functions} — para operações como obter o PID do processo
+atual (\texttt{bpf\_get\_current\_pid\_tgid}), ler memória do espaço de usuário
+de forma segura (\texttt{bpf\_probe\_read\_user}) ou emitir dados para o espaço
+de usuário (\texttt{bpf\_perf\_event\_output}) \cite{linuxkernel2024}.
+O conjunto de \textit{helpers} disponíveis varia conforme o tipo do programa,
+reforçando o princípio do menor privilégio.
+
+% ----------------------------------------------------------------
 \section{Verifier}
+% ----------------------------------------------------------------
 
+O verificador (\textit{verifier}) é o componente do kernel responsável por analisar
+estaticamente todo programa eBPF antes de sua execução e rejeitar aqueles que
+possam comprometer a segurança ou a estabilidade do sistema
+\cite{linuxkernel2024}.
+Essa análise ocorre em tempo de carregamento e é, portanto, transparente para as
+aplicações que consomem os dados coletados pelo programa \cite{gregg2019}.
+
+O verificador realiza duas passagens principais sobre o grafo de fluxo de controle
+do programa:
+
+\textbf{Primeira passagem — análise estrutural.}
+Verifica que o grafo de fluxo de controle é um DAG (\textit{Directed Acyclic
+Graph}), ou seja, que não existem ciclos não limitados que impeçam a terminação
+do programa.
+A partir do kernel 5.3, laços com número de iterações limitado e verificável são
+permitidos, mas o verificador precisa ser capaz de provar o limite superior
+\cite{linuxkernel2024}.
+
+\textbf{Segunda passagem — análise de estados.}
+Simula a execução do programa por todos os caminhos possíveis, rastreando o tipo
+e os possíveis valores de cada registrador e posição de pilha.
+São verificados, entre outros:
+
+\begin{itemize}
+  \item ausência de acesso a ponteiros não inicializados ou fora dos limites
+        permitidos (\textit{out-of-bounds});
+  \item uso correto dos argumentos das \textit{helper functions};
+  \item que o valor de retorno em \texttt{r0} é compatível com o tipo do programa;
+  \item que ponteiros do kernel não são vazados para o espaço de usuário
+        \cite{linuxkernel2024}.
+\end{itemize}
+
+Se alguma dessas verificações falhar, o carregamento é rejeitado com uma mensagem
+de erro descritiva, que pode ser consultada por ferramentas como \texttt{bpftool}
+\cite{bcc}.
+Essa propriedade garante que um programa eBPF com \textit{bug} não derruba o
+kernel — o pior cenário é a rejeição na fase de carregamento
+\cite{gregg2019}.
+
+% ----------------------------------------------------------------
 \section{Maps}
+% ----------------------------------------------------------------
+
+Mapas BPF (\textit{BPF maps}) são estruturas de dados genéricas de chave-valor
+alocadas no kernel e acessíveis tanto por programas eBPF quanto por aplicações
+em espaço de usuário \cite{linuxkernel2024}.
+Eles são o único mecanismo pelo qual um programa eBPF pode manter estado entre
+execuções e comunicar resultados para fora do kernel \cite{gregg2019}.
+
+A criação de um mapa é feita via \texttt{bpf(BPF\_MAP\_CREATE, ...)}, especificando
+o tipo, os tamanhos de chave e valor e a capacidade máxima.
+O acesso em espaço de usuário ocorre por meio de descritores de arquivo, que
+podem ser fixados no sistema de arquivos virtual \texttt{/sys/fs/bpf} para
+persistir além do ciclo de vida do processo criador \cite{linuxkernel2024}.
+
+Os tipos de mapas mais utilizados em aplicações de segurança e observabilidade são:
+
+\begin{itemize}
+  \item \textbf{\texttt{BPF\_MAP\_TYPE\_HASH}} — tabela de dispersão de propósito
+        geral; usada para rastrear estados de conexões, contagens por processo ou
+        listas de bloqueio \cite{linuxkernel2024};
+
+  \item \textbf{\texttt{BPF\_MAP\_TYPE\_ARRAY}} — vetor indexado por inteiro;
+        adequado para contadores globais e tabelas de configuração de tamanho fixo
+        \cite{gregg2019};
+
+  \item \textbf{\texttt{BPF\_MAP\_TYPE\_PERF\_EVENT\_ARRAY}} — canal de
+        comunicação assíncrona de alto desempenho para envio de eventos ao espaço
+        de usuário; amplamente utilizado para notificação em tempo real de eventos
+        de segurança \cite{linuxkernel2024};
+
+  \item \textbf{\texttt{BPF\_MAP\_TYPE\_RINGBUF}} — substituto moderno do
+        \texttt{PERF\_EVENT\_ARRAY}, introduzido no kernel 5.8, com menor
+        overhead de memória e garantia de ordenação de eventos \cite{linuxkernel2024};
+
+  \item \textbf{\texttt{BPF\_MAP\_TYPE\_LRU\_HASH}} — variante com política
+        de evicção LRU (\textit{Least Recently Used}), útil para rastrear
+        conexões ou processos ativos sem risco de esgotamento de memória
+        \cite{gregg2020}.
+\end{itemize}
+
+O acesso a mapas dentro de um programa eBPF é feito exclusivamente via
+\textit{helper functions} como \texttt{bpf\_map\_lookup\_elem},
+\texttt{bpf\_map\_update\_elem} e \texttt{bpf\_map\_delete\_elem}, cujos
+parâmetros são verificados pelo \textit{verifier} para garantir que os tamanhos
+de chave e valor respeitem os limites definidos na criação do mapa
+\cite{linuxkernel2024}.
+Essa combinação de flexibilidade e verificação formal é o que permite construir
+sistemas de detecção e controle de segurança robustos sem abrir mão da
+estabilidade do kernel \cite{gregg2019}.

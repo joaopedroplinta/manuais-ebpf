@@ -1,5 +1,136 @@
 \chapter{Introdução}
 
-\section{eBPF aplicado a redes}
+O \textit{extended Berkeley Packet Filter} (eBPF) é uma tecnologia do kernel Linux
+que permite a execução de programas verificados diretamente no espaço do kernel,
+sem necessidade de modificá-lo ou carregar módulos adicionais
+\cite{linuxkernel2024}.
+Originada do BSD Packet Filter proposto por \citeonline{mccanne1993} para captura
+eficiente de pacotes em nível de usuário, a tecnologia evoluiu para suportar casos
+de uso muito além da análise de rede: rastreamento de desempenho, observabilidade
+de sistemas e, de forma crescente, processamento de rede de alto desempenho
+\cite{gregg2019}.
 
+No contexto de redes, o eBPF assume relevância especial em ambientes de funções
+virtualizadas de rede (NFV), onde a capacidade de instrumentar e monitorar funções
+de rede sem impacto perceptível sobre o desempenho é um requisito crítico
+\cite{etsi2014}.
+\citeonline{alves2026tcc} investigaram justamente esse cenário, comparando
+ferramentas de extração de comportamento de funções virtualizadas --- trabalho que
+serviu de base para o minicurso documentado neste relatório.
+O repositório de código e os materiais práticos utilizados estão disponíveis em
+\citeonline{plinta2026repo}.
+
+% ----------------------------------------------------------------
+\section{eBPF aplicado a redes}
+% ----------------------------------------------------------------
+
+A aplicação do eBPF em redes se dá em múltiplas camadas da pilha de comunicação,
+desde o processamento de pacotes no nível do driver de rede até a instrumentação
+de aplicações de espaço de usuário que implementam protocolos \cite{linuxkernel2024}.
+
+\textbf{\textit{eXpress Data Path} (XDP).}
+O XDP é o ponto de intervenção mais precoce disponível para programas eBPF na
+pilha de rede do kernel Linux \cite{linuxkernel2024}.
+Um programa XDP é executado diretamente no driver da interface de rede, antes que
+o pacote seja alocado em um buffer \texttt{sk\_buff} e entregue à pilha de rede
+convencional.
+Isso permite descartar, redirecionar ou modificar pacotes com latência próxima à
+do hardware, viabilizando casos de uso como mitigação de DDoS, balanceamento de
+carga e encaminhamento acelerado \cite{gregg2019}.
+
+\textbf{\textit{Traffic Control} (TC).}
+O subsistema de controle de tráfego do kernel expõe \textit{hooks} eBPF tanto na
+entrada quanto na saída de pacotes, após o processamento de camada 2 e com acesso
+ao contexto completo do \texttt{sk\_buff} \cite{linuxkernel2024}.
+Essa posição na pilha oferece mais informações sobre o pacote do que o XDP ---
+incluindo metadados de cgroup e namespace --- ao custo de execução mais tardia.
+O TC é amplamente utilizado em implementações de políticas de rede por identidade
+em clusters Kubernetes, como as do projeto Cilium \cite{cassagnes2020}.
+
+\textbf{Rastreamento de sockets e chamadas de sistema de rede.}
+Programas eBPF conectados a \textit{tracepoints} de chamadas de sistema como
+\texttt{connect}, \texttt{accept}, \texttt{sendmsg} e \texttt{recvmsg} oferecem
+visibilidade sobre o comportamento de rede de cada processo individualmente,
+associando fluxos de rede a PIDs, UIDs e cgroups \cite{gregg2019}.
+Essa granularidade é essencial em ambientes NFV, onde múltiplas funções de rede
+virtualizadas compartilham o mesmo host e precisam ser monitoradas de forma isolada
+\cite{venancio2021}.
+
+\textbf{Monitoramento passivo de latência TCP.}
+O eBPF permite medir a latência de conexões TCP diretamente no kernel, sem
+modificar as aplicações ou gerar tráfego adicional de sonda
+\cite{research2024}.
+Métricas como RTT (\textit{round-trip time}), retransmissões e janela de
+congestionamento são acessíveis via \textit{tracepoints} de socket e podem ser
+agregadas em histogramas por fluxo, endereço de destino ou cgroup, fornecendo
+uma visão de desempenho de rede de alta fidelidade \cite{gregg2020}.
+
+\textbf{Exportação de métricas para sistemas de monitoramento.}
+Ferramentas como o \texttt{ebpf\_exporter} \cite{ebpfexporter} traduzem métricas
+coletadas por programas eBPF para o formato Prometheus \cite{prometheusdocs},
+permitindo sua visualização em dashboards Grafana \cite{grafanadocs} e integração
+com pipelines de observabilidade já existentes.
+Essa cadeia --- eBPF no kernel, Prometheus para coleta, Grafana para visualização
+--- é o padrão adotado no minicurso para demonstrar o monitoramento de funções
+virtualizadas de rede \cite{alves2026tcc}.
+
+% ----------------------------------------------------------------
 \section{Vantagens do eBPF para redes}
+% ----------------------------------------------------------------
+
+A adoção do eBPF em aplicações de rede é motivada por um conjunto de vantagens
+que o distinguem tanto de abordagens baseadas em espaço de usuário quanto de
+soluções que exigem modificação do kernel \cite{cassagnes2020}.
+
+\textbf{Baixo overhead de monitoramento.}
+Ferramentas tradicionais de monitoramento de rede --- como \texttt{sysstat}
+\cite{godard2024} e contadores do sistema de arquivos \texttt{/proc}
+\cite{manpages2024} --- realizam coleta periódica (\textit{polling}) com resolução
+tipicamente de um segundo, perdendo eventos de curta duração e introduzindo
+imprecisão temporal.
+\citeonline{cassagnes2020} demonstraram que programas eBPF impõem sobrecarga
+significativamente menor do que ferramentas de monitoramento convencionais,
+tornando o monitoramento contínuo viável mesmo em enlaces de alta taxa de
+transferência.
+
+\textbf{Granularidade por fluxo e por processo.}
+Enquanto contadores de interface de rede agregam todo o tráfego de um nó,
+programas eBPF no TC ou em \textit{tracepoints} de socket associam cada pacote
+ou conexão ao processo, cgroup e namespace responsável \cite{linuxkernel2024}.
+Em ambientes NFV, essa granularidade permite isolar o comportamento de rede de
+cada função virtualizada individualmente, sem necessidade de instrumentação da
+própria função \cite{venancio2021}.
+
+\textbf{Visibilidade sem modificação das aplicações.}
+O eBPF opera como observador externo: não requer modificação do código-fonte das
+funções de rede monitoradas, não impõe dependências de biblioteca e não altera o
+comportamento observado \cite{gregg2019}.
+Essa propriedade é especialmente valiosa em ambientes NFV com funções de terceiros,
+cujo código-fonte pode não estar disponível \cite{etsi2014}.
+
+\textbf{Processamento no kernel sem chamadas de sistema adicionais.}
+Ao executar diretamente no kernel, programas eBPF eliminam as trocas de contexto
+necessárias para comunicar eventos ao espaço de usuário em cada pacote ou conexão
+\cite{linuxkernel2024}.
+Agregações --- somas, médias, histogramas --- são calculadas em mapas BPF no
+kernel e lidas pelo espaço de usuário em intervalos configuráveis, reduzindo
+drasticamente o volume de dados transmitidos entre kernel e aplicação de
+monitoramento \cite{gregg2020}.
+
+\textbf{Programabilidade e extensibilidade.}
+Ao contrário de contadores fixos do kernel ou de filtros estáticos de
+\textit{firewall}, programas eBPF expressam lógica arbitrária --- dentro das
+restrições do verificador --- e podem ser atualizados dinamicamente sem
+interromper o tráfego de rede ou reiniciar serviços \cite{linuxkernel2024}.
+Essa flexibilidade permite adaptar a instrumentação às necessidades específicas
+de cada função virtualizada sem ciclos de desenvolvimento no kernel
+\cite{alves2026tcc}.
+
+\textbf{Portabilidade entre versões de kernel.}
+O mecanismo BPF CO-RE (\textit{Compile Once -- Run Everywhere}) \cite{nakryiko2020},
+implementado pela libbpf \cite{libbpf}, garante que um programa eBPF compilado
+uma única vez execute corretamente em diferentes versões do kernel Linux, sem
+recompilação.
+Em ambientes de produção com frotas heterogêneas de servidores --- comum em
+infraestruturas NFV de grande escala --- essa portabilidade reduz significativamente
+o custo operacional de manutenção de ferramentas de monitoramento \cite{etsi2014}.

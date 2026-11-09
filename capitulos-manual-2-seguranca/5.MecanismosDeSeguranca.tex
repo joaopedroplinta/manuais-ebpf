@@ -1,9 +1,180 @@
 \chapter{Mecanismos de Segurança}
 
+O eBPF não é apenas uma ferramenta de observação passiva: integrado a subsistemas
+de segurança consolidados do kernel Linux, ele viabiliza o controle ativo de
+processos, redes e recursos do sistema com um nível de programabilidade que
+abordagens tradicionais não oferecem \cite{linuxkernel2024}.
+Este capítulo apresenta os principais mecanismos pelos quais o eBPF interage com
+a infraestrutura de segurança do kernel.
+
+% ----------------------------------------------------------------
 \section{eBPF LSM}
+% ----------------------------------------------------------------
 
-\section{cgroup hooks}
+O \textit{Linux Security Module} (LSM) é uma interface do kernel que define um
+conjunto de \textit{hooks} em pontos de decisão de segurança — abertura de
+arquivos, criação de processos, operações de rede, acesso a capacidades do sistema,
+entre outros — e permite que módulos de segurança interceptem e influenciem essas
+operações \cite{linuxkernel2024}.
+Mecanismos tradicionais como SELinux e AppArmor são implementados como módulos
+LSM, porém requerem configuração complexa e não podem ser adaptados em tempo de
+execução.
 
+A partir do kernel 5.7, o tipo de programa \texttt{BPF\_PROG\_TYPE\_LSM} permite
+anexar programas eBPF diretamente aos \textit{hooks} LSM, criando módulos de
+segurança totalmente programáveis \cite{linuxkernel2024}.
+Ao retornar um valor de erro (por exemplo, \texttt{-EPERM}), o programa bloqueia
+a operação antes de sua conclusão; ao retornar zero, permite que ela prossiga.
+Essa decisão ocorre no próprio kernel, com latência de microssegundos, sem
+qualquer envolvimento do espaço de usuário no caminho crítico
+\cite{gregg2019}.
+
+Entre os \textit{hooks} LSM mais relevantes para segurança estão:
+
+\begin{itemize}
+  \item \texttt{bpf\_lsm\_file\_open} — intercepta a abertura de arquivos,
+        permitindo negar acesso com base em atributos do processo solicitante ou
+        do arquivo;
+  \item \texttt{bpf\_lsm\_bprm\_check\_security} — avalia a execução de um novo
+        programa, viabilizando \textit{allowlists} de binários autorizados;
+  \item \texttt{bpf\_lsm\_socket\_connect} — controla o estabelecimento de
+        conexões de rede por processo, útil para isolar serviços comprometidos;
+  \item \texttt{bpf\_lsm\_task\_kill} — regula o envio de sinais entre processos,
+        prevenindo interferências maliciosas entre contêineres.
+\end{itemize}
+
+Uma vantagem significativa do LSM BPF em relação ao SELinux e ao AppArmor é a
+possibilidade de combinar múltiplos programas no mesmo \textit{hook} — graças ao
+mecanismo \textit{BPF link} — e de atualizar as políticas dinamicamente, sem
+reiniciar serviços ou carregar novos módulos de kernel \cite{linuxkernel2024}.
+
+% ----------------------------------------------------------------
+\section{\textit{Cgroup hooks}}
+% ----------------------------------------------------------------
+
+\textit{Control groups} (cgroups) são o mecanismo do kernel Linux para organizar
+processos em hierarquias e aplicar limites de recursos (CPU, memória, I/O de
+rede e disco) a cada grupo \cite{linuxkernel2024}.
+Em ambientes de contêineres, cada contêiner é tipicamente mapeado a um cgroup
+distinto, tornando os \textit{hooks} de cgroup um ponto natural de aplicação de
+políticas de segurança com escopo por contêiner \cite{gregg2020}.
+
+O eBPF oferece um conjunto de tipos de programa associados a cgroups que permitem
+interceptar operações antes que elas aconteçam:
+
+\textbf{\texttt{BPF\_PROG\_TYPE\_CGROUP\_SKB}.}
+Filtra pacotes na entrada ou saída de um cgroup específico.
+Permite implementar políticas de rede por contêiner sem depender de regras de
+\textit{iptables} ou \textit{nftables}, com menor overhead e maior expressividade
+\cite{linuxkernel2024}.
+
+\textbf{\texttt{BPF\_PROG\_TYPE\_CGROUP\_SOCK} e variantes.}
+Controla a criação e o uso de sockets por processos do cgroup.
+Pode bloquear a criação de sockets de determinados protocolos ou famílias de
+endereço, restringindo efetivamente a superfície de ataque de rede de um
+contêiner \cite{gregg2019}.
+
+\textbf{\texttt{BPF\_PROG\_TYPE\_CGROUP\_DEVICE}.}
+Regula o acesso a dispositivos (\texttt{/dev/*}) por processos do cgroup,
+substituindo com vantagens a lista de dispositivos do cgroups v1
+\cite{linuxkernel2024}.
+
+\textbf{\texttt{BPF\_PROG\_TYPE\_CGROUP\_SYSCTL}.}
+Intercepta leituras e escritas em parâmetros \texttt{sysctl} realizadas por
+processos do cgroup, impedindo que um contêiner altere configurações globais do
+kernel que afetariam outros contêineres \cite{linuxkernel2024}.
+
+A granularidade por cgroup torna esses \textit{hooks} particularmente adequados
+para ambientes Kubernetes, onde políticas de segurança precisam ser aplicadas
+individualmente a cada \textit{pod} sem interromper os demais
+\cite{cassagnes2020}.
+
+% ----------------------------------------------------------------
 \section{Seccomp e eBPF}
+% ----------------------------------------------------------------
 
+O \textit{secure computing mode} (seccomp) é um mecanismo do kernel Linux que
+restringe o conjunto de chamadas de sistema que um processo pode invocar
+\cite{linuxkernel2024}.
+No modo \texttt{SECCOMP\_MODE\_FILTER}, introduzido no kernel 3.5, um programa BPF
+clássico (cBPF) define a política de filtragem — especificando quais chamadas de
+sistema são permitidas, bloqueadas ou encaminhadas para análise em espaço de usuário
+\cite{mccanne1993}.
+
+Com o eBPF, dois aspectos dessa integração evoluíram significativamente:
+
+\textbf{Geração programática de filtros seccomp.}
+Ferramentas modernas como \texttt{libseccomp} compilam políticas expressas em alto
+nível para o formato cBPF exigido pelo kernel.
+Pesquisas recentes exploram o uso de eBPF para gerar esses filtros de forma
+dinâmica a partir de perfis de comportamento observados em execução — em vez de
+listas estáticas definidas em tempo de desenvolvimento \cite{gregg2019}.
+
+\textbf{Auditoria de violações seccomp com eBPF.}
+Quando um filtro seccomp retorna \texttt{SECCOMP\_RET\_TRACE} ou
+\texttt{SECCOMP\_RET\_LOG}, a chamada de sistema bloqueada pode ser capturada por
+um programa eBPF conectado ao \textit{tracepoint} \texttt{syscalls:sys\_enter\_*},
+permitindo registrar tentativas de evasão com contexto completo — processo, PID,
+UID, argumentos — sem modificar o filtro seccomp original \cite{linuxkernel2024}.
+
+A combinação de seccomp com LSM BPF representa a abordagem de defesa em
+profundidade (\textit{defense in depth}) recomendada para ambientes de produção:
+o seccomp restringe o conjunto de chamadas de sistema acessíveis, enquanto o LSM
+BPF impõe controles adicionais sobre o que pode ser feito com as chamadas
+permitidas \cite{beyer2016}.
+Juntos, os dois mecanismos reduzem drasticamente a superfície de ataque exposta
+por um processo comprometido \cite{gregg2020}.
+
+% ----------------------------------------------------------------
 \section{Controle de processos e acesso a recursos}
+% ----------------------------------------------------------------
+
+Além dos mecanismos anteriores — orientados a interfaces específicas como sockets,
+arquivos e chamadas de sistema —, o eBPF oferece visibilidade e controle sobre o
+ciclo de vida de processos e o uso de recursos do sistema operacional de forma
+holística \cite{gregg2019}.
+
+\textbf{Rastreamento de ancestralidade de processos.}
+Utilizando mapas BPF do tipo \texttt{BPF\_MAP\_TYPE\_HASH}, é possível manter em
+tempo real uma tabela de processos ativos, registrando PID, PPID, UID, executável
+e cgroup de cada processo \cite{linuxkernel2024}.
+Essa árvore de processos viabiliza a detecção de \textit{process injection} — em
+que um atacante insere código em um processo legítimo —, pois alterações inesperadas
+na identidade ou no comportamento de um processo tornam-se visíveis
+\cite{majors2022}.
+
+\textbf{Monitoramento de uso de capacidades (\textit{capabilities}).}
+O modelo de capacidades do Linux substitui o binômio root/não-root por um conjunto
+granular de privilégios (\texttt{CAP\_NET\_ADMIN}, \texttt{CAP\_SYS\_PTRACE},
+\texttt{CAP\_DAC\_OVERRIDE}, entre outras) \cite{linuxkernel2024}.
+Programas eBPF conectados ao \textit{hook} LSM \texttt{bpf\_lsm\_capable} podem
+registrar toda tentativa de uso de capacidade, identificando processos que operam
+com mais privilégios do que o esperado — um indicador comum de escalonamento de
+privilégios \cite{gregg2020}.
+
+\textbf{Controle de acesso a namespaces.}
+Namespaces do Linux isolam recursos como PID, rede, sistema de arquivos e
+identificadores de usuário entre grupos de processos \cite{linuxkernel2024}.
+Tentativas de um processo sair do seu namespace — por exemplo, via
+\texttt{setns(2)} ou \texttt{unshare(2)} — podem ser monitoradas e bloqueadas
+por programas eBPF, prevenindo fugas de contêineres (\textit{container escapes})
+\cite{cassagnes2020}.
+
+\textbf{Observabilidade de acesso a arquivos e descritores.}
+O \textit{tracepoint} \texttt{sched\_process\_exit}, combinado com um mapa de
+estado de arquivos abertos, permite detectar processos que terminam sem fechar
+descritores sensíveis — padrão observado em algumas classes de \textit{malware}
+que abusam de herança de descritores entre processos \cite{gregg2019}.
+
+\textbf{Limitação dinâmica de recursos.}
+Em conjunto com os \textit{cgroup hooks} descritos na seção anterior, programas
+eBPF podem implementar cotas dinâmicas de chamadas de sistema por processo — por
+exemplo, limitando a taxa de chamadas \texttt{fork(2)} para mitigar ataques de
+exaustão de processos (\textit{fork bombs}) — sem necessidade de reconfigurar
+os limites de cgroup em espaço de usuário \cite{linuxkernel2024}.
+
+A combinação desses controles com os mecanismos de observabilidade descritos no
+capítulo anterior cria uma camada de segurança coesa: eventos suspeitos são
+detectados, correlacionados e, quando necessário, bloqueados em uma única
+infraestrutura baseada em eBPF, sem a sobrecarga de agentes externos e com
+latência compatível com ambientes de produção \cite{majors2022}.

@@ -1,9 +1,206 @@
 \chapter{Detecção e Monitoramento}
 
+A capacidade de detectar atividades maliciosas em tempo real, sem degradar o
+desempenho das aplicações monitoradas, é um dos principais diferenciais do eBPF
+frente a soluções tradicionais de segurança \cite{cassagnes2020}.
+Este capítulo apresenta técnicas concretas de detecção e monitoramento baseadas
+em eBPF, organizadas pelos vetores de observação mais relevantes em ambientes de
+produção.
+
+% ----------------------------------------------------------------
 \section{Detecção de execução de processos}
+% ----------------------------------------------------------------
 
+A execução de processos é um dos eventos mais informativos para segurança:
+praticamente toda ação maliciosa — desde a exploração de uma vulnerabilidade até
+a persistência no sistema — envolve em algum momento a criação ou substituição de
+um processo \cite{gregg2019}.
+O eBPF permite monitorar esse vetor com cobertura total e latência mínima,
+independentemente da origem do processo.
+
+O \textit{tracepoint} \texttt{sys\_enter\_execve} é acionado toda vez que um
+processo invoca a chamada de sistema \texttt{execve(2)}, responsável por substituir
+a imagem do processo atual por um novo executável \cite{linuxkernel2024}.
+Um programa eBPF nesse ponto coleta, sem modificar o processo:
+
+\begin{itemize}
+  \item PID e PPID — identificadores do processo e de seu pai, permitindo
+        reconstruir a árvore de execução;
+  \item UID e GID — identidade real do solicitante, revelando tentativas de
+        execução sob identidade indevida;
+  \item caminho do executável e argumentos da linha de comando, via
+        \texttt{bpf\_probe\_read\_user\_str};
+  \item cgroup e namespace de PID, essenciais para identificar o contêiner de
+        origem em ambientes Kubernetes \cite{cassagnes2020}.
+\end{itemize}
+
+O exemplo a seguir ilustra um script bpftrace que registra toda execução
+originada de processos filhos de servidores web — padrão típico de exploração de
+vulnerabilidades de execução remota de código:
+
+\begin{lstlisting}[language=bash, caption={Detecção de shell a partir de processo de serviço web com bpftrace.}]
+tracepoint:syscalls:sys_enter_execve
+/comm == "nginx" || comm == "apache2"/
+{
+    printf("[ALERTA] shell filho de %s: %s (pid=%d uid=%d)\n",
+           comm, str(args->filename), pid, uid);
+}
+\end{lstlisting}
+
+Além do \texttt{execve}, o \textit{tracepoint} \texttt{sched\_process\_fork}
+captura a criação de processos via \texttt{fork(2)} e \texttt{clone(2)},
+permitindo rastrear a propagação de processos maliciosos que se replicam antes de
+executar sua carga \cite{gregg2020}.
+Combinados em um mapa BPF que mantém a árvore de parentesco em memória, esses
+dois pontos de observação fornecem uma visão completa do ciclo de vida de processos
+sem qualquer instrumentação das aplicações \cite{majors2022}.
+
+% ----------------------------------------------------------------
 \section{Monitoramento de arquivos, chamadas de sistema e conexões}
+% ----------------------------------------------------------------
 
+\textbf{Acesso a arquivos.}
+Programas eBPF conectados ao \textit{tracepoint} \texttt{sys\_enter\_openat}
+registram toda abertura de arquivo com contexto completo — processo, caminho,
+\textit{flags} de acesso e resultado da operação \cite{linuxkernel2024}.
+Caminhos de particular interesse para segurança incluem:
+
+\begin{itemize}
+  \item \texttt{/etc/shadow}, \texttt{/etc/passwd} e \texttt{/root/.ssh/} —
+        arquivos de credenciais frequentemente alvo de exfiltração;
+  \item \texttt{/proc/\$PID/mem} e \texttt{/proc/\$PID/maps} — interfaces de
+        memória de processo usadas por técnicas de injeção \cite{manpages2024};
+  \item \texttt{/usr/bin/}, \texttt{/lib/} e \texttt{/sbin/} abertos em modo de
+        escrita — indicativo de \textit{rootkits} que modificam binários do sistema.
+\end{itemize}
+
+A ferramenta \texttt{opensnoop} do BCC \cite{bcc} implementa esse padrão e é
+amplamente utilizada em investigações forenses para identificar quais arquivos
+foram acessados durante um incidente.
+
+\textbf{Chamadas de sistema.}
+O conjunto completo de \textit{tracepoints} \texttt{sys\_enter\_*} oferece
+visibilidade sobre qualquer chamada de sistema invocada por qualquer processo
+\cite{linuxkernel2024}.
+Para fins de detecção, chamadas críticas são monitoradas seletivamente para
+reduzir o volume de eventos:
+
+\begin{itemize}
+  \item \texttt{ptrace} — interceptação de outro processo; abusada por
+        \textit{malware} para injeção de código e por \textit{rootkits} para
+        ocultar presença;
+  \item \texttt{setuid} / \texttt{setgid} / \texttt{setcap} — alteração de
+        identidade ou capacidades, indicativas de escalonamento de privilégios;
+  \item \texttt{mmap} com \texttt{PROT\_EXEC} — mapeamento de memória executável,
+        padrão de carregamento de shellcode \cite{gregg2019};
+  \item \texttt{init\_module} / \texttt{finit\_module} — carregamento de módulos
+        de kernel, vetor clássico de instalação de \textit{rootkits}.
+\end{itemize}
+
+\textbf{Conexões de rede.}
+Combinando \textit{tracepoints} de \textit{socket} com \textit{hooks} de XDP e
+TC, o eBPF oferece visibilidade em múltiplas camadas da pilha de rede
+\cite{linuxkernel2024}.
+O monitoramento de conexões de saída — via \texttt{sys\_enter\_connect} — permite
+identificar processos que estabelecem comunicação com endereços não previstos,
+padrão associado a \textit{beaconing} de \textit{Command and Control} (C2) e
+exfiltração de dados \cite{cassagnes2020}.
+A ferramenta \texttt{tcpconnect} do BCC \cite{bcc} registra cada nova conexão TCP
+com PID, endereço de destino e porta, sem impacto perceptível sobre o throughput
+da rede \cite{gregg2019}.
+
+% ----------------------------------------------------------------
 \section{Detecção de comportamento anômalo}
+% ----------------------------------------------------------------
 
+A detecção de anomalias vai além do monitoramento de eventos individuais: consiste
+em identificar sequências ou padrões de comportamento que diferem do que é esperado
+para um processo, serviço ou usuário \cite{majors2022}.
+O eBPF é particularmente adequado para esse fim porque permite acumular estado em
+mapas BPF ao longo do tempo e realizar correlações diretamente no kernel, antes
+mesmo que os eventos sejam enviados ao espaço de usuário \cite{linuxkernel2024}.
+
+\textbf{Desvio de perfil de chamadas de sistema.}
+Cada classe de aplicação — servidor web, banco de dados, agente de monitoramento
+— apresenta um perfil estável de chamadas de sistema em operação normal.
+Um programa eBPF pode construir, durante um período de observação inicial, um
+histograma de frequência de chamadas por processo e alertar quando a distribuição
+observada diverge significativamente desse perfil de referência
+\cite{gregg2019}.
+Essa técnica é resistente a \textit{malware} que tenta mimetizar nomes de
+processos legítimos, pois o comportamento em nível de chamadas de sistema é mais
+difícil de falsificar.
+
+\textbf{Comunicação lateral entre contêineres.}
+Em ambientes Kubernetes, comunicação direta entre \textit{pods} que normalmente
+não se comunicam é um indicador de movimentação lateral após comprometimento
+\cite{cassagnes2020}.
+Mapas BPF do tipo \texttt{BPF\_MAP\_TYPE\_HASH} indexados por par
+(cgroup de origem, cgroup de destino) permitem detectar esses fluxos anômalos em
+tempo real, sem depender de logs de \textit{firewall} com atraso de segundos
+\cite{linuxkernel2024}.
+
+\textbf{Escalada de privilégios em tempo de execução.}
+A sequência \texttt{fork} → \texttt{execve} de um binário SUID → \texttt{setuid(0)}
+é o padrão de exploração de vulnerabilidades de escalonamento de privilégios local
+mais comum \cite{gregg2020}.
+Um programa eBPF que rastreia transições de UID em mapas indexados por PID detecta
+essa sequência em microssegundos, muito antes que ela se manifeste em logs de
+auditoria \cite{gregg2019}.
+
+\textbf{Injeção de código em processos em execução.}
+O uso de \texttt{ptrace} ou de \texttt{process\_vm\_writev} para escrever em
+memória de outro processo é uma técnica de injeção amplamente explorada
+\cite{gregg2019}.
+Correlacionando o PID do processo chamador com o PID alvo e verificando se a
+relação pai-filho é legítima — usando a árvore de processos mantida em um mapa
+BPF — é possível distinguir operações legítimas de depuradores de tentativas de
+injeção maliciosa \cite{majors2022}.
+
+% ----------------------------------------------------------------
 \section{Auditoria de eventos}
+% ----------------------------------------------------------------
+
+A auditoria de segurança tem como objetivo registrar, de forma confiável e
+verificável, eventos relevantes para conformidade e investigação forense
+\cite{beyer2016}.
+O subsistema \texttt{auditd} do Linux é a solução tradicional para esse fim, mas
+apresenta limitações de desempenho em sistemas de alta carga e dificuldades de
+extensão para novos tipos de eventos \cite{gregg2020}.
+O eBPF surge como complemento ou substituto natural: coleta eventos com menor
+sobrecarga, permite filtragem inteligente diretamente no kernel e é extensível sem
+alterações no sistema operacional \cite{cassagnes2020}.
+
+\textbf{Registro de eventos com contexto completo.}
+Por meio do mapa \texttt{BPF\_MAP\_TYPE\_RINGBUF}, programas eBPF emitem registros
+de auditoria estruturados para o espaço de usuário com campos como timestamp em
+nanossegundos, PID, UID, cgroup, chamada de sistema, argumentos e código de retorno
+\cite{linuxkernel2024}.
+Essa riqueza de contexto supera a granularidade oferecida pelo \texttt{auditd}
+para a maioria dos eventos \cite{gregg2019}.
+
+\textbf{Filtragem inteligente no kernel.}
+Diferentemente do \texttt{auditd}, que envia todos os eventos para o espaço de
+usuário e filtra depois, programas eBPF aplicam regras de interesse diretamente
+no kernel — registrando apenas eventos que satisfazem critérios de segurança
+predefinidos \cite{linuxkernel2024}.
+Isso reduz drasticamente o volume de dados transmitidos e processados, tornando
+viável a auditoria contínua mesmo em sistemas com dezenas de milhares de chamadas
+de sistema por segundo \cite{cassagnes2020}.
+
+\textbf{Integridade do registro de auditoria.}
+Uma preocupação legítima em auditoria forense é a possibilidade de um atacante com
+privilégios suficientes suprimir registros de suas ações.
+Programas eBPF em execução no kernel são mais difíceis de desabilitar
+silenciosamente do que agentes em espaço de usuário: sua remoção requer privilégios
+explícitos e gera eventos observáveis por outros programas eBPF — criando
+uma cadeia de custódia parcialmente auto-referencial \cite{majors2022}.
+
+\textbf{Integração com sistemas externos.}
+Registros de auditoria coletados por programas eBPF podem ser encaminhados para
+sistemas de gerenciamento de eventos e informações de segurança (SIEM) via
+exportadores como o \texttt{ebpf\_exporter} \cite{ebpfexporter} ou via
+\textit{pipelines} Prometheus/Grafana \cite{prometheusdocs,grafanadocs}.
+Essa integração centraliza os dados de múltiplos nós em uma visão unificada,
+essencial para detecção de ataques distribuídos que envolvem vários sistemas
+simultaneamente \cite{beyer2016}.

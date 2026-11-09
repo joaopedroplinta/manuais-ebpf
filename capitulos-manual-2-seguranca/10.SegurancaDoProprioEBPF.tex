@@ -1,9 +1,196 @@
 \chapter{Segurança do próprio eBPF}
 
+O eBPF é frequentemente apresentado como uma tecnologia inerentemente segura por
+construção, e há razões sólidas para isso: o verificador estático, o modelo de
+capacidades e o sandboxing no kernel constituem um conjunto de garantias superior
+ao de módulos de kernel tradicionais \cite{linuxkernel2024}.
+No entanto, como qualquer tecnologia que opera com privilégios elevados no coração
+do sistema operacional, o eBPF introduz sua própria superfície de ataque — e
+compreendê-la é essencial para quem pretende utilizá-lo em ambientes de produção
+ou de segurança \cite{gregg2019}.
+
+% ----------------------------------------------------------------
 \section{Privilégios necessários}
+% ----------------------------------------------------------------
 
+Historicamente, carregar qualquer programa eBPF exigia a capacidade
+\texttt{CAP\_SYS\_ADMIN}, o privilégio mais amplo do modelo de capacidades Linux —
+equivalente, na prática, a acesso de superusuário \cite{linuxkernel2024}.
+Essa exigência limitava o uso do eBPF a administradores de sistema e tornava
+inviável sua adoção em ambientes multiusuário onde processos não privilegiados
+precisassem de observabilidade.
+
+A partir do kernel 5.8, o modelo foi refinado com a introdução de capacidades
+mais granulares \cite{linuxkernel2024}:
+
+\begin{itemize}
+  \item \textbf{\texttt{CAP\_BPF}} — permite carregar programas eBPF e criar
+        mapas BPF de propósito geral, sem conceder os demais privilégios
+        associados a \texttt{CAP\_SYS\_ADMIN};
+  \item \textbf{\texttt{CAP\_PERFMON}} — necessária para anexar programas a
+        eventos de desempenho (\texttt{perf events}), \textit{kprobes} e
+        \textit{tracepoints}, em conjunto com \texttt{CAP\_BPF};
+  \item \textbf{\texttt{CAP\_NET\_ADMIN}} — exigida para programas que operam
+        sobre a pilha de rede, como os do tipo XDP e TC.
+\end{itemize}
+
+Além das capacidades, o parâmetro do kernel \texttt{kernel.unprivileged\_bpf\_disabled}
+controla se processos sem nenhuma das capacidades acima podem carregar programas
+eBPF do tipo \texttt{SOCKET\_FILTER} e \texttt{CGROUP\_SKB} — os únicos
+historicamente acessíveis a processos não privilegiados \cite{linuxkernel2024}.
+Em ambientes de segurança, recomenda-se definir esse parâmetro como \texttt{1}
+para desabilitar o acesso não privilegiado ao eBPF:
+
+\begin{lstlisting}[language=bash, caption={Desabilitação de eBPF não privilegiado via sysctl.}]
+sudo sysctl -w kernel.unprivileged_bpf_disabled=1
+\end{lstlisting}
+
+Em ambientes de contêineres, a concessão de \texttt{CAP\_BPF} a um contêiner
+deve ser tratada com cautela: um contêiner com essa capacidade pode, em princípio,
+instrumentar processos de outros contêineres no mesmo nó, comprometendo o
+isolamento esperado \cite{gregg2020}.
+
+% ----------------------------------------------------------------
 \section{eBPF Verifier}
+% ----------------------------------------------------------------
 
+O verificador (\textit{verifier}) é a principal linha de defesa do kernel contra
+programas eBPF maliciosos ou defeituosos \cite{linuxkernel2024}.
+Conforme descrito no Capítulo~4, ele realiza análise estática sobre o grafo de
+fluxo de controle do programa antes de qualquer execução.
+Neste capítulo, o foco recai sobre suas limitações e sobre os casos em que ele
+pode ser contornado ou enganado.
+
+\textbf{Complexidade e superfície de ataque do próprio verificador.}
+O verificador é um componente de software com dezenas de milhares de linhas de
+código e lógica altamente complexa de análise de tipos e intervalos de valores
+\cite{linuxkernel2024}.
+Vulnerabilidades no verificador já foram descobertas e exploradas: um programa
+eBPF cuidadosamente construído pode enganar a análise de intervalos (\textit{range
+analysis}), levando o verificador a aprovar código que, em execução, realiza
+acesso fora dos limites de um mapa ou registrador \cite{gregg2019}.
+Essas vulnerabilidades são particularmente graves porque, uma vez aprovado pelo
+verificador, o programa passa a executar com plena confiança do kernel.
+
+\textbf{Vulnerabilidades históricas notáveis.}
+Diversas CVEs relacionadas ao verificador eBPF foram divulgadas nos últimos anos,
+permitindo escalonamento de privilégios locais a partir de um processo com
+\texttt{CAP\_BPF} ou, em kernels mais antigos, a partir de processos completamente
+não privilegiados \cite{linuxkernel2024,gregg2020}.
+Esses incidentes reforçam a importância de manter o kernel atualizado e de
+restringir o acesso ao subsistema BPF ao menor conjunto possível de processos.
+
+\textbf{Limites da verificação formal.}
+O verificador não garante correção semântica — apenas propriedades estruturais de
+segurança e terminação \cite{linuxkernel2024}.
+Um programa eBPF pode ser aprovado pelo verificador e ainda assim produzir
+resultados incorretos, registrar eventos falsos ou introduzir condições de corrida
+em mapas BPF compartilhados entre múltiplas CPUs sem o uso adequado de operações
+atômicas \cite{gregg2019}.
+Essas falhas não comprometem o kernel, mas podem comprometer a integridade dos
+dados de segurança coletados.
+
+% ----------------------------------------------------------------
 \section{Riscos de segurança}
+% ----------------------------------------------------------------
 
+A adoção do eBPF como infraestrutura de segurança introduz um paradoxo: a mesma
+tecnologia usada para defender sistemas pode ser weaponizada por atacantes com
+privilégios suficientes \cite{gregg2020}.
+
+\textbf{eBPF como vetor de \textit{rootkit}.}
+Um atacante que obtém \texttt{CAP\_BPF} ou \texttt{CAP\_SYS\_ADMIN} pode carregar
+programas eBPF que interceptam chamadas de sistema para ocultar arquivos, processos
+ou conexões de rede — implementando um \textit{rootkit} inteiramente em eBPF, sem
+modificar o sistema de arquivos ou carregar módulos de kernel \cite{gregg2019}.
+Diferentemente de \textit{rootkits} tradicionais, que deixam rastros em módulos
+carregados ou em binários modificados, um \textit{rootkit} eBPF reside apenas em
+memória e é mais difícil de detectar com ferramentas forenses convencionais
+\cite{majors2022}.
+
+\textbf{Exfiltração de dados via mapas BPF.}
+Programas eBPF têm acesso de leitura à memória de processos via
+\texttt{bpf\_probe\_read}, incluindo buffers de aplicações que processam dados
+sensíveis — chaves criptográficas, senhas, tokens de autenticação \cite{gregg2019}.
+Um programa malicioso pode copiar esses dados para um mapa BPF e exfiltrá-los
+para o espaço de usuário de forma praticamente invisível para ferramentas de
+monitoramento que não inspecionam o próprio subsistema BPF \cite{linuxkernel2024}.
+
+\textbf{Interferência com programas eBPF legítimos.}
+Em sistemas onde múltiplos programas eBPF operam simultaneamente — agentes de
+segurança, ferramentas de observabilidade, plugins de rede —, um programa
+malicioso com os privilégios adequados pode modificar mapas BPF compartilhados,
+alterar o comportamento de programas legítimos ou desanexar \textit{links} BPF
+que implementam políticas de controle de acesso \cite{linuxkernel2024}.
+
+\textbf{Ataques especulativos (\textit{Spectre}).}
+O compilador JIT do kernel gera código nativo a partir do \textit{bytecode} BPF.
+Programas eBPF podem ser construídos para explorar vulnerabilidades de execução
+especulativa como Spectre, lendo memória do kernel fora dos limites permitidos
+pelo verificador via canais laterais de temporização \cite{linuxkernel2024}.
+O kernel implementa mitigações como o mascaramento de índices de mapa e a
+serialização de acessos especulativos, mas essas mitigações impõem sobrecarga
+de desempenho e podem não cobrir todas as variantes de ataques especulativos
+\cite{gregg2020}.
+
+% ----------------------------------------------------------------
 \section{Limitações}
+% ----------------------------------------------------------------
+
+Além dos riscos ativos de segurança, o eBPF apresenta limitações técnicas e
+operacionais relevantes que devem ser consideradas ao planejar seu uso em
+infraestrutura de segurança.
+
+\textbf{Dependência de versão de kernel.}
+Embora o BPF CO-RE \cite{nakryiko2020} mitigue significativamente problemas de
+portabilidade, funcionalidades mais recentes — como LSM BPF, \textit{ringbuf} e
+suporte a iteradores — só estão disponíveis em kernels recentes \cite{linuxkernel2024}.
+Organizações que operam com distribuições empresariais de ciclo de vida longo,
+como RHEL 8 ou Ubuntu 20.04, podem não ter acesso a esses recursos sem atualizar
+o kernel, o que em ambientes regulados pode ser um processo demorado.
+
+\textbf{Tamanho e complexidade dos programas.}
+O verificador impõe um limite no número de instruções por programa eBPF
+(historicamente 4.096, expandido para 1 milhão a partir do kernel 5.2 para
+programas privilegiados) e exige que todos os caminhos de execução sejam
+verificáveis \cite{linuxkernel2024}.
+Lógica de detecção complexa pode não caber em um único programa e precisa ser
+distribuída entre múltiplos programas encadeados via \textit{tail calls} ou
+\textit{BPF-to-BPF calls}, aumentando a complexidade de desenvolvimento e
+depuração \cite{gregg2019}.
+
+\textbf{Ausência de sistema de arquivos persistente.}
+Programas e mapas eBPF residem na memória do kernel e são destruídos quando o
+último descritor de arquivo que os referencia é fechado \cite{linuxkernel2024}.
+Embora o sistema de arquivos virtual \texttt{/sys/fs/bpf} permita fixar
+(\textit{pin}) objetos BPF para persistência além do ciclo de vida do processo
+criador, a gestão desse estado persistente adiciona complexidade operacional a
+agentes de segurança que precisam sobreviver a reinicializações de serviços
+\cite{gregg2020}.
+
+\textbf{Depuração limitada.}
+O ambiente de execução eBPF não suporta chamadas de sistema arbitrárias, nem
+a maioria das funções de biblioteca padrão, o que torna a depuração de programas
+eBPF mais trabalhosa do que a de aplicações convencionais \cite{gregg2019}.
+Ferramentas como \texttt{bpftool} e a integração com \texttt{llvm-objdump}
+auxiliam na inspeção do \textit{bytecode} e do estado de mapas, mas o ciclo de
+desenvolvimento é significativamente mais lento do que em espaço de usuário
+\cite{bcc}.
+
+\textbf{Cobertura limitada em ambientes altamente virtualizados.}
+Em máquinas virtuais aninhadas ou em contêineres com configurações de kernel
+restritivas, funcionalidades do eBPF podem estar indisponíveis ou parcialmente
+desabilitadas \cite{linuxkernel2024}.
+Organizações que operam em nuvens públicas devem verificar quais tipos de
+programa eBPF são suportados pelo hipervisor e pela versão de kernel disponível
+na instância, pois nem todas as ofertas de nuvem expõem o conjunto completo de
+funcionalidades do eBPF ao sistema convidado \cite{gregg2020}.
+
+\textbf{Curva de aprendizado.}
+O desenvolvimento eficaz de programas eBPF exige compreensão simultânea de
+internos do kernel Linux, do modelo de programação BPF, das restrições do
+verificador e das ferramentas de compilação \cite{gregg2019}.
+Equipes de segurança sem experiência prévia em desenvolvimento de kernel tendem
+a depender de ferramentas de alto nível como Falco e Tetragon, o que é adequado
+para a maioria dos casos de uso, mas limita a capacidade de customização quando
+as regras disponíveis não cobrem ameaças específicas do ambiente \cite{majors2022}.

@@ -1,9 +1,180 @@
 \chapter{eBPF em Containers e Kubernetes}
 
-\section{Segurança de containers}
+A adoção massiva de contêineres e orquestradores como o Kubernetes trouxe novos
+desafios de segurança: ambientes altamente dinâmicos, com processos efêmeros,
+múltiplos inquilinos compartilhando o mesmo kernel e superfície de ataque
+distribuída por dezenas ou centenas de nós \cite{cassagnes2020}.
+Abordagens tradicionais de segurança baseadas em agentes por processo ou em
+inspeção de logs com atraso mostram-se inadequadas nesse contexto.
+O eBPF, por operar no kernel compartilhado por todos os contêineres de um nó,
+oferece visibilidade e controle centralizados sem depender de instrumentação
+individual de cada carga de trabalho \cite{linuxkernel2024}.
 
+% ----------------------------------------------------------------
+\section{Segurança de contêineres}
+% ----------------------------------------------------------------
+
+Contêineres não são máquinas virtuais: compartilham o kernel do sistema hospedeiro
+e dependem de mecanismos de isolamento do próprio Linux — namespaces, cgroups e
+capacidades — para separar cargas de trabalho \cite{linuxkernel2024}.
+Essa arquitetura torna o kernel o ponto central de controle e, consequentemente,
+o principal vetor de ataque em ambientes de contêineres \cite{gregg2020}.
+
+As ameaças mais relevantes nesse contexto são:
+
+\textbf{Fuga de contêiner (\textit{container escape}).}
+Um processo dentro de um contêiner que consegue sair do seu namespace de PID,
+de rede ou de sistema de arquivos e interagir com o kernel ou com outros contêineres
+sem restrição \cite{linuxkernel2024}.
+Fugas exploram tipicamente vulnerabilidades em chamadas de sistema como
+\texttt{unshare(2)}, \texttt{setns(2)} ou \texttt{mount(2)}, ou abusam de
+capacidades Linux concedidas desnecessariamente ao contêiner.
+
+\textbf{Escalada de privilégios dentro do contêiner.}
+Mesmo sem sair do namespace, um processo que obtém \texttt{CAP\_SYS\_ADMIN}
+ou executa como \texttt{root} no contêiner pode comprometer outros processos do
+mesmo nó \cite{gregg2019}.
+
+\textbf{Ataques de movimentação lateral.}
+Um contêiner comprometido que estabelece comunicação direta com outros contêineres
+ou serviços de infraestrutura — banco de dados, API do Kubernetes — fora dos
+fluxos previstos \cite{cassagnes2020}.
+
+O eBPF endereça esses vetores de múltiplas formas.
+Programas conectados a \textit{tracepoints} de chamadas de sistema como
+\texttt{unshare}, \texttt{setns} e \texttt{clone} detectam tentativas de
+manipulação de namespaces em tempo real \cite{linuxkernel2024}.
+\textit{Hooks} LSM BPF podem bloquear essas operações para processos cujos cgroups
+não estejam em uma lista de permissões, sem qualquer modificação nas imagens de
+contêiner \cite{gregg2019}.
+Mapas BPF indexados por par de cgroups registram todo fluxo de rede entre
+contêineres, tornando a movimentação lateral imediatamente visível \cite{majors2022}.
+
+% ----------------------------------------------------------------
 \section{Segurança em Kubernetes}
+% ----------------------------------------------------------------
 
+O Kubernetes introduz uma camada adicional de complexidade: além dos processos
+em execução nos nós, existe o plano de controle — API Server, etcd, scheduler,
+controller manager — cujo comprometimento implica controle total sobre o cluster
+\cite{beyer2016}.
+O eBPF é utilizado em duas frentes complementares nesse ambiente.
+
+\textbf{Substituição do kube-proxy.}
+O componente tradicional \texttt{kube-proxy} implementa as regras de roteamento
+de serviços Kubernetes por meio de tabelas \textit{iptables} de crescimento
+linear com o número de serviços \cite{linuxkernel2024}.
+Projetos como o Cilium substituem o \texttt{kube-proxy} por programas eBPF anexados
+a \textit{hooks} TC e XDP, implementando o mesmo roteamento com complexidade
+constante e menor latência, além de oferecer visibilidade sobre cada fluxo de
+rede entre \textit{pods} \cite{cassagnes2020}.
+
+\textbf{Observabilidade do plano de dados.}
+Em um cluster com centenas de \textit{pods} espalhados por dezenas de nós, rastrear
+um fluxo de requisição de ponta a ponta requer correlação de eventos de múltiplos
+processos e nós \cite{majors2022}.
+Programas eBPF nos nós coletam identificadores de fluxo — endereços IP, portas,
+metadados de cgroup — e os associam a metadados Kubernetes (namespace, nome do
+\textit{pod}, \textit{labels}) obtidos do API Server, compondo uma visão de
+observabilidade de rede enriquecida sem necessidade de \textit{sidecars} ou
+modificação das aplicações \cite{linuxkernel2024}.
+
+\textbf{Auditoria do API Server.}
+Toda operação no cluster — criação de \textit{pods}, modificação de segredos,
+concessão de permissões RBAC — passa pelo API Server e pode ser auditada por
+programas eBPF conectados aos \textit{tracepoints} de rede do nó onde ele executa,
+complementando os logs de auditoria nativos do Kubernetes com contexto de processo
+e identidade de rede \cite{gregg2019}.
+
+% ----------------------------------------------------------------
 \section{Políticas de segurança}
+% ----------------------------------------------------------------
 
+O Kubernetes oferece primitivos nativos de política de segurança —
+\textit{NetworkPolicies}, \textit{PodSecurityAdmission} e RBAC — mas sua
+implementação e granularidade dependem dos plugins de infraestrutura instalados
+\cite{linuxkernel2024}.
+O eBPF amplia significativamente o espaço de políticas aplicáveis.
+
+\textbf{Políticas de rede por identidade.}
+Enquanto \textit{NetworkPolicies} nativas operam sobre endereços IP e portas, que
+mudam a cada recriação de \textit{pod}, soluções baseadas em eBPF como o Cilium
+implementam políticas baseadas em identidade: a identidade de um \textit{pod} é
+derivada dos seus \textit{labels} Kubernetes e codificada em um rótulo numérico
+propagado em cabeçalhos de pacotes \cite{cassagnes2020}.
+Isso permite expressar regras como ``\textit{pods} do serviço A só podem receber
+tráfego de \textit{pods} do serviço B no mesmo namespace'' de forma estável,
+independentemente de endereços IP efêmeros \cite{linuxkernel2024}.
+
+\textbf{Políticas de chamadas de sistema por \textit{pod}.}
+Perfis seccomp restringem as chamadas de sistema disponíveis para um contêiner,
+mas são estáticos e difíceis de calibrar sem causar falsos positivos \cite{gregg2020}.
+O eBPF permite gerar perfis dinâmicos observando o comportamento real de cada
+\textit{pod} durante um período de aprendizado e, em seguida, aplicar uma política
+derivada desse perfil sem modificar o manifesto do \textit{pod}
+\cite{nakryiko2020}.
+
+\textbf{\textit{TracingPolicies} declarativas.}
+Ferramentas como o Tetragon expõem um recurso Kubernetes
+(\texttt{TracingPolicy}) que permite expressar políticas de segurança em YAML —
+quais chamadas de sistema monitorar, quais argumentos filtrar e qual ação tomar
+(alertar, registrar ou bloquear) — que são traduzidas automaticamente em programas
+eBPF e implantadas em todos os nós do cluster \cite{linuxkernel2024}.
+Esse modelo declarativo integra a segurança ao fluxo de \textit{GitOps} já adotado
+por equipes de plataforma, tratando políticas de segurança como código versionável
+e revisável \cite{beyer2016}.
+
+% ----------------------------------------------------------------
 \section{Detecção de atividades suspeitas}
+% ----------------------------------------------------------------
+
+A natureza dinâmica do Kubernetes — onde \textit{pods} são criados e destruídos
+em segundos — exige que a detecção de atividades suspeitas opere em tempo real e
+seja capaz de correlacionar eventos efêmeros antes que evidências desapareçam
+\cite{majors2022}.
+O eBPF é a tecnologia que melhor satisfaz esse requisito, e os padrões de ataque
+mais comuns em ambientes Kubernetes têm contrapartidas diretas em programas de
+detecção baseados em eBPF.
+
+\textbf{Execução de shell em contêiner.}
+A abertura de um terminal interativo (\texttt{/bin/sh}, \texttt{/bin/bash})
+dentro de um contêiner de produção é um forte indicador de comprometimento ou
+de acesso não autorizado via \texttt{kubectl exec} \cite{cassagnes2020}.
+Programas eBPF detectam esse padrão combinando o \textit{tracepoint}
+\texttt{sys\_enter\_execve} com a verificação de que o processo possui um TTY
+associado e que seu cgroup corresponde a um \textit{pod} em execução
+\cite{linuxkernel2024}.
+
+\textbf{Acesso a segredos montados.}
+Segredos Kubernetes são montados como arquivos no sistema de arquivos do contêiner.
+Leitura desses arquivos por processos diferentes do esperado — especialmente por
+shells ou binários de sistema — é detectada por programas eBPF conectados ao
+\textit{tracepoint} \texttt{sys\_enter\_openat}, filtrando caminhos que
+correspondam a diretórios de montagem de segredos (\texttt{/var/run/secrets/})
+\cite{gregg2019}.
+
+\textbf{Comunicação com o API Server a partir de contêineres de aplicação.}
+Requisições HTTP ao endereço do API Server (\texttt{kubernetes.default.svc})
+originadas de \textit{pods} de aplicação que não deveriam ter acesso ao plano
+de controle indicam possível tentativa de movimentação para comprometer o cluster
+\cite{beyer2016}.
+Mapas BPF indexados por endereço de destino e cgroup de origem permitem detectar
+esses fluxos em microssegundos e bloqueá-los via \textit{hook} de cgroup de socket
+\cite{linuxkernel2024}.
+
+\textbf{Modificação de imagens em tempo de execução.}
+Contêineres devem ser imutáveis: qualquer escrita no sistema de arquivos raiz
+fora de volumes montados explicitamente é suspeita \cite{gregg2020}.
+Programas eBPF conectados a \textit{hooks} LSM de abertura de arquivo em modo de
+escrita — filtrados pelo namespace de montagem do contêiner — detectam esse padrão
+independentemente da ferramenta ou técnica usada pelo atacante para realizar a
+escrita \cite{linuxkernel2024}.
+
+\textbf{Varredura de rede interna.}
+Um \textit{pod} comprometido que tenta conectar a múltiplos endereços e portas
+em sequência rápida executa varredura de rede para mapear serviços internos do
+cluster \cite{cassagnes2020}.
+Mapas BPF do tipo \texttt{BPF\_MAP\_TYPE\_LRU\_HASH} acumulam contagens de
+tentativas de conexão por \textit{pod} em janelas de tempo deslizantes e acionam
+alertas quando o número de destinos distintos excede um limiar configurável
+\cite{linuxkernel2024,gregg2020}.

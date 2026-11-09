@@ -1,11 +1,248 @@
 \chapter{Ferramentas de Segurança}
 
+O ecossistema de ferramentas construídas sobre eBPF cresceu rapidamente nos últimos
+anos, cobrindo desde utilitários interativos de linha de comando até plataformas
+de segurança em produção adotadas por grandes organizações \cite{gregg2019}.
+Este capítulo apresenta as principais ferramentas relevantes para aplicações de
+segurança, organizadas por nível de abstração --- da biblioteca de baixo nível à
+plataforma de detecção e resposta.
+
+% ----------------------------------------------------------------
 \section{BCC}
+% ----------------------------------------------------------------
 
+O \textit{BPF Compiler Collection} (BCC) é um conjunto de ferramentas e uma
+framework de desenvolvimento para programas eBPF mantido pelo projeto IO Visor
+\cite{bcc}.
+Ele foi pioneiro na democratização do eBPF ao introduzir uma API em Python e Lua
+sobre a qual programas eBPF em C são compilados e carregados em tempo de execução,
+eliminando a necessidade de configurar manualmente a cadeia de compilação
+clang/LLVM para cada ferramenta \cite{gregg2019}.
+
+O BCC inclui mais de cem ferramentas prontas para uso, das quais diversas têm
+aplicação direta em segurança:
+
+\begin{itemize}
+  \item \textbf{\texttt{execsnoop}} --- registra toda execução de processo com PID,
+        PPID, UID e linha de comando, permitindo reconstruir cadeias de execução
+        após um incidente;
+  \item \textbf{\texttt{opensnoop}} --- monitora abertura de arquivos em tempo real,
+        essencial para detectar acesso a credenciais e arquivos de configuração
+        sensíveis;
+  \item \textbf{\texttt{tcpconnect}} e \textbf{\texttt{tcpaccept}} --- registram
+        conexões TCP de saída e entrada por processo, viabilizando a detecção de
+        \textit{beaconing} e de serviços não autorizados em escuta;
+  \item \textbf{\texttt{capable}} --- rastreia o uso de capacidades
+        (\textit{capabilities}) do Linux por processo, identificando tentativas
+        de escalonamento de privilégios;
+  \item \textbf{\texttt{ttysnoop}} --- intercepta a saída de terminais TTY, útil
+        para auditoria de sessões interativas de administradores ou atacantes.
+\end{itemize}
+
+Do ponto de vista arquitetural, cada ferramenta BCC é composta por dois componentes:
+o programa eBPF em C, compilado em tempo de execução e carregado no kernel, e um
+controlador em Python que configura os mapas BPF, recebe os eventos e os apresenta
+ao operador \cite{bcc}.
+Essa separação facilita a criação de novas ferramentas, mas introduz a dependência
+do compilador LLVM em cada nó monitorado --- limitação mitigada pelo uso de libbpf
+com BPF CO-RE, descrito na Seção~\ref{sec:libbpf} \cite{nakryiko2020}.
+
+% ----------------------------------------------------------------
 \section{bpftrace}
+% ----------------------------------------------------------------
 
+O bpftrace é uma linguagem de rastreamento de alto nível para eBPF, inspirada em
+DTrace e AWK, que permite escrever programas de monitoramento e investigação em
+poucas linhas diretamente na linha de comando \cite{bpftrace}.
+Enquanto o BCC é orientado ao desenvolvimento de ferramentas reutilizáveis, o
+bpftrace é otimizado para investigação interativa e \textit{ad hoc} --- ideal
+para resposta a incidentes e análise forense em tempo real \cite{gregg2019}.
+
+A linguagem oferece acesso direto a \textit{tracepoints}, \textit{kprobes},
+\textit{uprobes} e \textit{perf events} por meio de uma sintaxe concisa de
+predicados e ações:
+
+\begin{lstlisting}[language=C,
+  caption={Monitoramento de tentativas de abertura de \texttt{/etc/shadow}
+           com bpftrace.}]
+tracepoint:syscalls:sys_enter_openat
+/str(args->filename) == "/etc/shadow"/
+{
+    printf("[ALERTA] %s (pid=%d uid=%d) tentou abrir /etc/shadow\n",
+           comm, pid, uid);
+}
+\end{lstlisting}
+
+\begin{lstlisting}[language=C,
+  caption={Detecção de uso de \texttt{ptrace} por processos não privilegiados.}]
+tracepoint:syscalls:sys_enter_ptrace
+/uid != 0/
+{
+    printf("[ALERTA] ptrace por %s (pid=%d uid=%d) -> pid alvo: %d\n",
+           comm, pid, uid, args->pid);
+}
+\end{lstlisting}
+
+O bpftrace suporta agregações nativas --- histogramas, contagens e somas --- que
+permitem sintetizar grandes volumes de eventos em estatísticas compactas sem
+sobrecarregar o espaço de usuário com eventos individuais \cite{bpftrace}.
+Essa capacidade é valiosa em investigações de segurança onde o volume de eventos
+é alto e o operador precisa rapidamente identificar os processos ou caminhos
+mais frequentes em determinado vetor de acesso \cite{gregg2020}.
+
+% ----------------------------------------------------------------
 \section{libbpf}
+\label{sec:libbpf}
+% ----------------------------------------------------------------
 
+A libbpf é a biblioteca oficial de baixo nível para desenvolvimento de aplicações
+eBPF em C, mantida como parte do próprio repositório do kernel Linux e espelhada
+em repositório independente para facilitar o consumo por projetos externos
+\cite{libbpf}.
+Ela abstrai as chamadas de sistema \texttt{bpf(2)} e \texttt{perf\_event\_open(2)},
+oferecendo uma API estável para carregamento de programas, criação e acesso a mapas,
+e gerenciamento do ciclo de vida de \textit{links} BPF \cite{linuxkernel2024}.
+
+O principal diferencial da libbpf em relação ao BCC é o suporte nativo ao BPF
+CO-RE (\textit{Compile Once -- Run Everywhere}) \cite{nakryiko2020}.
+Com CO-RE, o programa eBPF é compilado uma única vez --- gerando um binário
+portável --- e ao ser carregado em diferentes versões do kernel, a libbpf reescreve
+automaticamente os offsets de acesso a estruturas do kernel com base nas informações
+de tipo BTF (\textit{BPF Type Format}) expostas pelo sistema \cite{linuxkernel2024}.
+Isso elimina a necessidade de distribuir o compilador LLVM junto com a ferramenta,
+viabilizando a implantação de agentes de segurança em frotas de servidores
+heterogêneas com kernels de versões distintas \cite{nakryiko2020}.
+
+O fluxo de desenvolvimento com libbpf segue o padrão:
+
+\begin{enumerate}
+  \item Escrever o programa eBPF em C usando os \textit{headers}
+        \texttt{vmlinux.h} (gerado via \texttt{bpftool btf dump}) e
+        \texttt{bpf/bpf\_helpers.h};
+  \item Compilar com \texttt{clang -{}-target bpf -g -O2}, gerando um objeto
+        \texttt{.o} contendo o \textit{bytecode} BPF e metadados BTF;
+  \item Usar o \textit{skeleton} gerado por \texttt{bpftool gen skeleton} para
+        integrar o carregamento e a configuração do programa na aplicação em
+        espaço de usuário em C \cite{libbpf}.
+\end{enumerate}
+
+Ferramentas de segurança de produção como Falco e Tetragon utilizam libbpf
+internamente, o que ilustra sua posição como base do ecossistema moderno de eBPF
+\cite{linuxkernel2024}.
+
+% ----------------------------------------------------------------
 \section{Falco}
+% ----------------------------------------------------------------
 
+O Falco é uma plataforma de segurança em tempo de execução (\textit{runtime
+security}) de código aberto, originalmente desenvolvida pela Sysdig e hoje um
+projeto graduado da \textit{Cloud Native Computing Foundation} (CNCF).
+Seu objetivo é detectar comportamentos anômalos e violações de política em
+contêineres, máquinas virtuais e hosts Linux por meio de regras expressas em
+alto nível, traduzidas internamente para programas eBPF que monitoram chamadas
+de sistema \cite{linuxkernel2024,gregg2019}.
+
+A arquitetura do Falco é composta por três camadas:
+
+\begin{enumerate}
+  \item \textbf{Driver de coleta} --- responsável por capturar eventos do kernel.
+        O Falco suporta três modos: módulo de kernel (legado), driver eBPF clássico
+        e, a partir da versão 0.35, driver moderno baseado em libbpf com suporte
+        a CO-RE \cite{nakryiko2020,libbpf};
+  \item \textbf{Motor de regras} --- avalia cada evento capturado contra um conjunto
+        de regras YAML que definem condições e campos de alerta. As regras padrão
+        cobrem os vetores de ataque mais comuns em ambientes Kubernetes, como
+        execução de shell em contêiner, acesso a segredos montados e modificação
+        de binários do sistema;
+  \item \textbf{Canal de saída} --- publica alertas em múltiplos destinos:
+        \textit{stdout}, arquivos de log, webhooks HTTP, filas de mensagens e
+        integrações com sistemas SIEM \cite{majors2022}.
+\end{enumerate}
+
+Um exemplo de regra Falco que detecta shell em contêiner é apresentado a seguir:
+
+\begin{lstlisting}[language={},
+  caption={Regra Falco para detecção de terminal interativo em contêiner.}]
+- rule: Terminal shell in container
+  desc: Detecta a abertura de shell interativo dentro de um conteiner.
+  condition: >
+    spawned_process and container
+    and shell_procs and proc.tty != 0
+  output: >
+    Shell interativo detectado (usuario=%user.name
+    container=%container.name imagem=%container.image.repository
+    proc=%proc.cmdline)
+  priority: WARNING
+\end{lstlisting}
+
+O Falco é amplamente adotado como primeira linha de detecção em clusters Kubernetes,
+onde a efêmeridade dos processos torna ineficazes as abordagens tradicionais de
+auditoria baseadas em logs \cite{cassagnes2020}.
+
+% ----------------------------------------------------------------
 \section{Tetragon}
+% ----------------------------------------------------------------
+
+O Tetragon é uma plataforma de segurança e observabilidade baseada em eBPF
+desenvolvida pela Isovalent --- empresa criadora do projeto Cilium --- e
+disponibilizada como código aberto.
+Diferentemente do Falco, que opera principalmente como detector passivo, o Tetragon
+integra observabilidade e \textbf{aplicação de políticas} (\textit{enforcement})
+em um único agente: ele pode não apenas alertar sobre comportamentos suspeitos,
+mas bloqueá-los em tempo real diretamente no kernel, sem roundtrip para o espaço
+de usuário \cite{linuxkernel2024,gregg2019}.
+
+O Tetragon expõe dois primitivos principais:
+
+\textbf{\textit{TracingPolicy}.}
+Um recurso Kubernetes que define, de forma declarativa, quais eventos coletar e
+quais ações tomar.
+Internamente, cada política é compilada em um ou mais programas eBPF que são
+carregados no kernel e conectados a \textit{kprobes}, \textit{tracepoints} ou
+\textit{hooks} LSM conforme necessário.
+As ações disponíveis incluem \texttt{Sigkill} --- enviar SIGKILL ao processo
+infrator diretamente do kernel --- e \texttt{Override} --- retornar um código de
+erro para a chamada de sistema sem permitir sua execução \cite{linuxkernel2024}.
+
+\textbf{Exportador de eventos gRPC.}
+Todos os eventos coletados são emitidos via gRPC em um formato estruturado rico em
+contexto --- incluindo metadados de Kubernetes como namespace, \textit{pod} e
+\textit{label} --- compatível com sistemas de análise como Hubble e plataformas
+SIEM \cite{majors2022}.
+
+Uma \textit{TracingPolicy} que bloqueia escrita em binários do sistema por qualquer
+processo, exceto o gerenciador de pacotes, ilustra a capacidade de
+\textit{enforcement} do Tetragon:
+
+\begin{lstlisting}[language={},
+  caption={TracingPolicy Tetragon bloqueando escrita em diretórios de sistema.}]
+apiVersion: cilium.io/v1alpha1
+kind: TracingPolicy
+metadata:
+  name: proteger-binarios-sistema
+spec:
+  kprobes:
+  - call: "security_file_permission"
+    syscall: false
+    args:
+    - index: 0
+      type: "file"
+    - index: 1
+      type: "int"
+    selectors:
+    - matchArgs:
+      - index: 1
+        operator: "Equal"
+        values: ["2"]
+      matchBinaries:
+      - operator: "NotIn"
+        values: ["/usr/bin/dpkg", "/usr/bin/rpm"]
+      matchActions:
+      - action: Sigkill
+\end{lstlisting}
+
+A combinação de Falco --- para detecção com regras de alto nível --- e Tetragon ---
+para aplicação de políticas de baixa latência --- representa uma arquitetura de
+defesa em profundidade eficaz em ambientes de contêineres, onde a velocidade de
+resposta é crítica para conter ataques antes que se propaguem
+\cite{beyer2016,cassagnes2020}.

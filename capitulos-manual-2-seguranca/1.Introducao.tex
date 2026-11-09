@@ -1,7 +1,130 @@
 \chapter{Introdução}
 
+O \textit{extended Berkeley Packet Filter} (eBPF) é uma tecnologia do kernel Linux que
+permite a execução de programas verificados e seguros diretamente no espaço do kernel,
+sem a necessidade de modificá-lo ou carregar módulos adicionais
+\cite{linuxkernel2024}.
+Originada do BSD Packet Filter (BPF) proposto por \citeonline{mccanne1993} para
+captura eficiente de pacotes em nível de usuário, a tecnologia evoluiu amplamente
+e passou a suportar casos de uso muito além da análise de rede: rastreamento de
+desempenho, observabilidade e, de forma crescente, segurança de sistemas
+\cite{gregg2019}.
+
+Neste contexto, o presente relatório documenta o minicurso introdutório de eBPF
+realizado na \textit{Semana de Ciência e Tecnologia} (SciTec) do Instituto Federal
+do Paraná, câmpus Pinhais, em 2026.
+O minicurso teve como base o Trabalho de Conclusão de Curso de
+\citeonline{alves2026tcc}, cujo foco é o monitoramento de funções virtualizadas de
+redes (NFV), e foi expandido para cobrir aplicações voltadas à área de segurança
+da informação.
+O material prático e o repositório de código utilizados estão disponíveis em
+\citeonline{plinta2026repo}.
+
+% ----------------------------------------------------------------
 \section{eBPF no contexto de segurança}
+% ----------------------------------------------------------------
 
+A segurança de sistemas operacionais depende, em grande medida, da capacidade de
+observar e controlar eventos internos ao kernel com baixa latência e mínima
+interferência sobre as cargas de trabalho em produção
+\cite{beyer2016}.
+Abordagens tradicionais — como módulos de kernel dedicados, agentes em espaço de
+usuário ou chamadas de sistema adicionais — impõem sobrecarga considerável ou
+exigem privilégios que ampliam a superfície de ataque
+\cite{cassagnes2020}.
+
+O eBPF resolve essa tensão ao fornecer um ambiente de execução sandboxado dentro do
+próprio kernel \cite{linuxkernel2024}.
+Antes de ser executado, cada programa eBPF passa por um verificador (\textit{verifier})
+estático que garante terminação, ausência de acessos a memória inválidos e respeito
+às políticas de segurança do sistema — tornando a injeção de código malicioso por
+essa via estruturalmente inviável \cite{gregg2019}.
+Além disso, o mecanismo BPF CO-RE (\textit{Compile Once -- Run Everywhere}) permite
+que programas compilados uma única vez sejam executados em diferentes versões do
+kernel sem recompilação, o que facilita a implantação uniforme de políticas de
+segurança em ambientes heterogêneos \cite{nakryiko2020}.
+
+Ferramentas consolidadas como BCC \cite{bcc} e bpftrace \cite{bpftrace}, construídas
+sobre a biblioteca libbpf \cite{libbpf}, tornaram o desenvolvimento de programas
+eBPF acessível a engenheiros e pesquisadores de segurança, acelerando a adoção da
+tecnologia nesse domínio.
+
+% ----------------------------------------------------------------
 \section{Casos de uso de segurança}
+% ----------------------------------------------------------------
 
+O eBPF encontra aplicação em diversas categorias de segurança de sistemas e redes.
+
+\textbf{Filtragem e controle de pacotes de rede.}
+Por meio do \textit{eXpress Data Path} (XDP), programas eBPF são anexados à interface
+de rede antes mesmo que os pacotes sejam entregues à pilha de rede do kernel,
+possibilitando bloqueio de tráfego malicioso — como ataques de negação de serviço
+(DDoS) — com latência mínima \cite{linuxkernel2024}.
+Essa abordagem supera em desempenho soluções baseadas em \textit{iptables} ou
+\textit{nftables} para cenários de alta taxa de pacotes \cite{gregg2020}.
+
+\textbf{Monitoramento de chamadas de sistema (\textit{syscall}).}
+Programas eBPF podem ser vinculados a pontos de rastreamento (\textit{tracepoints})
+e sondas (\textit{kprobes/uprobes}) sobre chamadas de sistema, permitindo detectar
+comportamentos anômalos em tempo real — como tentativas de escalonamento de
+privilégios, acesso a arquivos sensíveis ou execução de binários não autorizados
+\cite{gregg2019}.
+Essa capacidade é explorada por soluções de segurança em tempo de execução
+(\textit{runtime security}), como Falco e Cilium, que baseiam suas regras de
+detecção em programas eBPF.
+
+\textbf{Aplicação de políticas de rede em ambientes de contêineres.}
+Em infraestruturas Kubernetes, o eBPF substitui com vantagens o modelo tradicional
+de \textit{kube-proxy} baseado em \textit{iptables}, implementando políticas de
+rede (\textit{NetworkPolicies}) com menor sobrecarga e maior expressividade
+\cite{cassagnes2020}.
+A visibilidade granular sobre fluxos de comunicação entre pods viabiliza também
+a detecção de movimentação lateral em ataques internos ao cluster.
+
+\textbf{Auditoria e rastreamento forense.}
+A capacidade de registrar, em mapas eBPF, eventos de sistema com alta fidelidade e
+sem impacto perceptível sobre as aplicações torna a tecnologia adequada para coleta
+de evidências forenses em ambientes de produção \cite{majors2022}.
+Diferentemente de agentes em espaço de usuário, que podem ser suprimidos por um
+invasor com privilégios suficientes, programas eBPF no kernel oferecem maior
+resistência a tentativas de evasão.
+
+% ----------------------------------------------------------------
 \section{Vantagens do eBPF para segurança}
+% ----------------------------------------------------------------
+
+Em comparação com abordagens convencionais, o uso de eBPF em segurança apresenta
+um conjunto de vantagens que justificam sua adoção crescente.
+
+\textbf{Baixo impacto sobre o desempenho.}
+A execução de programas eBPF ocorre no kernel, evitando as trocas de contexto
+(\textit{context switches}) necessárias em soluções baseadas em espaço de usuário.
+\citeonline{cassagnes2020} demonstraram que o eBPF impõe sobrecarga significativamente
+menor do que ferramentas tradicionais de monitoramento, tornando-o adequado para
+ambientes de produção com requisitos rígidos de latência.
+
+\textbf{Segurança por construção.}
+O verificador do kernel rejeita programas que possam comprometer a estabilidade ou a
+segurança do sistema, garantindo que apenas código validado seja executado
+\cite{linuxkernel2024}.
+Essa propriedade distingue o eBPF de módulos de kernel convencionais, que operam
+sem tais restrições e representam risco elevado quando mal implementados.
+
+\textbf{Portabilidade e manutenibilidade.}
+O BPF CO-RE \cite{nakryiko2020} elimina a necessidade de recompilar programas para
+cada versão de kernel, reduzindo o custo operacional de manutenção de ferramentas
+de segurança distribuídas em frotas heterogêneas de servidores.
+
+\textbf{Programabilidade e extensibilidade.}
+Ao contrário de soluções estáticas, políticas de segurança baseadas em eBPF podem
+ser atualizadas dinamicamente — sem reinicialização do sistema ou interrupção dos
+serviços — respondendo a novas ameaças com agilidade \cite{gregg2019}.
+Ecossistemas como o BCC \cite{bcc} e o bpftrace \cite{bpftrace} fornecem abstrações
+de alto nível que reduzem a curva de aprendizado para equipes de segurança sem
+experiência prévia em programação de kernel.
+
+\textbf{Visibilidade unificada.}
+Por operar no ponto central de controle do sistema operacional, um único programa
+eBPF pode correlacionar eventos de rede, sistema de arquivos, agendador de processos
+e chamadas de sistema, oferecendo uma visão holística do comportamento do sistema
+que ferramentas compartimentadas dificilmente alcançam \cite{majors2022}.

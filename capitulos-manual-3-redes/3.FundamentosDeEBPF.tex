@@ -1,11 +1,253 @@
 \chapter{Fundamentos de eBPF}
 
+Este capítulo apresenta os conceitos fundamentais necessários para compreender
+como o eBPF se integra à pilha de rede do Linux.
+O foco é construir um modelo mental claro da jornada de um pacote pelo kernel ---
+e dos pontos em que programas eBPF podem observá-la ou modificá-la ---
+antes de avançar para os exemplos práticos de monitoramento de funções
+virtualizadas de rede \cite{linuxkernel2024}.
+
+% ----------------------------------------------------------------
 \section{Arquitetura de rede do Linux}
+% ----------------------------------------------------------------
 
+A pilha de rede do Linux é uma implementação em software do modelo TCP/IP,
+estruturada em camadas que separam responsabilidades e permitem que o kernel
+gerencie interfaces de rede heterogêneas com uma API uniforme para as aplicações
+\cite{gregg2020}.
+
+A jornada de um pacote recebido segue, de forma simplificada, as etapas abaixo:
+
+\begin{enumerate}
+  \item \textbf{Driver da interface de rede} --- o hardware sinaliza a chegada de
+        um pacote via interrupção; o driver aloca um descritor de buffer
+        (\texttt{sk\_buff}) e copia os dados do pacote para a memória do sistema;
+  \item \textbf{Camada de enlace (L2)} --- o kernel verifica o endereço MAC de
+        destino e encaminha o quadro ao protocolo de rede correto (ARP, IPv4,
+        IPv6);
+  \item \textbf{Camada de rede (L3)} --- o subsistema IP realiza roteamento,
+        fragmentação e verificação de integridade do cabeçalho;
+  \item \textbf{Camada de transporte (L4)} --- TCP ou UDP desmultiplexa o pacote
+        para o socket correspondente com base nas portas de origem e destino;
+  \item \textbf{Espaço de usuário} --- a aplicação lê os dados do socket via
+        chamadas de sistema como \texttt{recv(2)} ou \texttt{read(2)}
+        \cite{manpages2024}.
+\end{enumerate}
+
+Na direção de saída, o caminho é percorrido no sentido inverso: a aplicação escreve
+no socket, o kernel empacota os dados, seleciona a rota, segmenta se necessário e
+entrega ao driver para transmissão \cite{gregg2019}.
+
+Cada etapa desse caminho expõe pontos de observação e intervenção para programas
+eBPF, que podem ser anexados em diferentes posições da pilha para coletar métricas,
+filtrar pacotes ou modificar cabeçalhos sem alterar o código das aplicações
+\cite{linuxkernel2024}.
+
+% ----------------------------------------------------------------
 \section{Kernel Networking Stack}
+% ----------------------------------------------------------------
 
+O elemento central da pilha de rede do kernel Linux é o \texttt{sk\_buff}
+(\textit{socket buffer}), uma estrutura de dados que representa um pacote ao longo
+de toda a sua jornada pelo kernel \cite{linuxkernel2024}.
+O \texttt{sk\_buff} carrega não apenas os bytes do pacote, mas também metadados
+como a interface de entrada, marcações de QoS, estado de conexão e ponteiros para
+os cabeçalhos de cada camada --- L2, L3 e L4 --- permitindo que cada subsistema
+acesse diretamente a porção relevante do pacote sem recopiar os dados
+\cite{gregg2020}.
+
+Os subsistemas da pilha que interagem diretamente com programas eBPF incluem:
+
+\textbf{Netfilter.}
+Framework de filtragem de pacotes sobre o qual \textit{iptables} e \textit{nftables}
+são construídos.
+Opera em cinco pontos de ancoragem (\textit{hooks}) distribuídos ao longo do caminho
+de entrada e saída de pacotes \cite{linuxkernel2024}.
+Embora o eBPF não opere diretamente sobre os \textit{hooks} Netfilter, ambos
+coexistem na pilha e suas regras são avaliadas em sequência.
+
+\textbf{Controle de tráfego (\textit{Traffic Control} --- TC).}
+Subsistema responsável pelo enfileiramento, escalonamento e modelagem de tráfego
+de saída, e pela classificação de tráfego de entrada \cite{linuxkernel2024}.
+Expõe \textit{hooks} eBPF tanto em entrada (\texttt{clsact ingress}) quanto em
+saída (\texttt{clsact egress}), com acesso completo ao \texttt{sk\_buff} e aos
+metadados de cgroup e namespace do processo originador \cite{cassagnes2020}.
+
+\textbf{Socket e camada de transporte.}
+A camada de socket expõe \textit{tracepoints} e \textit{kprobes} sobre funções
+como \texttt{tcp\_connect}, \texttt{tcp\_close} e \texttt{udp\_sendmsg}, permitindo
+rastrear o comportamento de rede de cada processo individualmente, com associação
+direta a PID, UID e cgroup \cite{gregg2019}.
+
+\textbf{Fila de recepção multi-núcleo (RPS/RFS).}
+Em sistemas com múltiplos núcleos de processamento, o kernel distribui o
+processamento de pacotes entre CPUs por meio dos mecanismos RPS e RFS
+\cite{linuxkernel2024}.
+Programas eBPF do tipo \texttt{BPF\_PROG\_TYPE\_SK\_REUSEPORT} podem influenciar
+essa distribuição, balanceando fluxos entre workers de forma programável ---
+caso de uso relevante em funções virtualizadas de rede que precisam escalar
+horizontalmente \cite{venancio2021}.
+
+% ----------------------------------------------------------------
 \section{Hooks de rede}
+% ----------------------------------------------------------------
 
+O eBPF oferece pontos de ancoragem em múltiplas posições da pilha de rede, cada um
+com características distintas de latência, visibilidade e capacidade de intervenção
+\cite{linuxkernel2024}.
+A Figura~\ref{fig:hooks} ilustra a posição relativa de cada \textit{hook} no
+caminho de um pacote.
+
+\textbf{XDP (\textit{eXpress Data Path}).}
+O XDP é executado no driver da interface de rede, antes da alocação do
+\texttt{sk\_buff} \cite{linuxkernel2024}.
+Por operar no ponto mais precoce da pilha, é o \textit{hook} de menor latência
+disponível para programas eBPF --- em implementações nativas (\textit{native XDP}),
+o programa é executado diretamente no contexto de interrupção do driver, com acesso
+apenas aos bytes brutos do pacote via estrutura \texttt{xdp\_md}.
+As ações possíveis são \texttt{XDP\_PASS} (entregar à pilha normal),
+\texttt{XDP\_DROP} (descartar), \texttt{XDP\_TX} (retransmitir pela mesma interface)
+e \texttt{XDP\_REDIRECT} (encaminhar para outra interface ou socket)
+\cite{gregg2019}.
+
+\textbf{TC (\textit{Traffic Control}).}
+Executa após a alocação do \texttt{sk\_buff}, com acesso a metadados de contexto
+mais ricos do que o XDP --- incluindo informações de cgroup, namespace e marcações
+de conexão \cite{linuxkernel2024}.
+Opera em dois pontos: \texttt{ingress} (entrada, antes do roteamento) e
+\texttt{egress} (saída, após a decisão de roteamento).
+As ações possíveis incluem \texttt{TC\_ACT\_OK} (continuar), \texttt{TC\_ACT\_SHOT}
+(descartar) e \texttt{TC\_ACT\_REDIRECT} (redirecionar) \cite{cassagnes2020}.
+
+\textbf{\textit{Tracepoints} de socket.}
+Pontos de rastreamento estáticos sobre operações de socket --- criação, conexão,
+envio, recepção e encerramento --- que fornecem visibilidade sobre o comportamento
+de rede por processo sem possibilidade de intervenção no fluxo de pacotes
+\cite{linuxkernel2024}.
+São o \textit{hook} preferencial para monitoramento de desempenho de rede em
+ambientes NFV, pois associam métricas de latência e vazão diretamente à função
+virtualizada responsável \cite{venancio2021}.
+
+\textbf{\textit{Cgroup} de socket (\texttt{BPF\_PROG\_TYPE\_CGROUP\_SOCK}).}
+Programas desse tipo são executados quando um processo do cgroup cria ou conecta
+um socket, permitindo aplicar políticas de rede com escopo por contêiner ou por
+função virtualizada de rede \cite{linuxkernel2024}.
+São a base dos controles de rede por identidade implementados por projetos como
+o Cilium em clusters Kubernetes \cite{cassagnes2020}.
+
+% ----------------------------------------------------------------
 \section{eBPF Programs}
+% ----------------------------------------------------------------
 
+Um programa eBPF voltado para rede segue o mesmo modelo de execução descrito
+para aplicações de segurança, com variações no tipo de programa, no contexto
+recebido como argumento e nas \textit{helper functions} disponíveis
+\cite{linuxkernel2024}.
+
+O tipo do programa determina o \textit{hook} compatível e o contexto passado:
+programas XDP recebem um ponteiro para \texttt{struct xdp\_md}, que expõe os
+limites do buffer do pacote; programas TC recebem um ponteiro para
+\texttt{struct \_\_sk\_buff}, uma visão segura do \texttt{sk\_buff} do kernel
+com campos de metadados acessíveis; programas de \textit{tracepoint} de socket
+recebem os argumentos da chamada de sistema correspondente \cite{linuxkernel2024}.
+
+O exemplo a seguir ilustra um programa XDP mínimo que conta pacotes recebidos
+por protocolo de camada 4 e os armazena em um mapa BPF:
+
+\begin{lstlisting}[language=C,
+  caption={Programa XDP que conta pacotes por protocolo L4.}]
+#include <linux/bpf.h>
+#include <linux/if_ether.h>
+#include <linux/ip.h>
+#include <bpf/bpf_helpers.h>
+
+struct {
+    __uint(type, BPF_MAP_TYPE_ARRAY);
+    __uint(max_entries, 256);
+    __type(key, __u32);
+    __type(value, __u64);
+} pkt_count SEC(".maps");
+
+SEC("xdp")
+int conta_pacotes(struct xdp_md *ctx)
+{
+    void *data     = (void *)(long)ctx->data;
+    void *data_end = (void *)(long)ctx->data_end;
+
+    struct ethhdr *eth = data;
+    if ((void *)(eth + 1) > data_end)
+        return XDP_PASS;
+
+    struct iphdr *ip = (void *)(eth + 1);
+    if ((void *)(ip + 1) > data_end)
+        return XDP_PASS;
+
+    __u32 proto = ip->protocol;
+    __u64 *cnt  = bpf_map_lookup_elem(&pkt_count, &proto);
+    if (cnt)
+        __sync_fetch_and_add(cnt, 1);
+
+    return XDP_PASS;
+}
+
+char LICENSE[] SEC("license") = "GPL";
+\end{lstlisting}
+
+As verificações de limites (\texttt{data\_end}) são obrigatórias: o verificador
+do kernel rejeita qualquer programa que acesse memória do pacote sem confirmar
+que o acesso está dentro dos limites do buffer \cite{linuxkernel2024}.
+Essa propriedade garante que programas XDP não possam causar leituras fora dos
+limites mesmo em pacotes malformados \cite{gregg2019}.
+
+% ----------------------------------------------------------------
 \section{eBPF Maps}
+% ----------------------------------------------------------------
+
+Mapas BPF são a estrutura de dados central para comunicação entre o programa eBPF
+no kernel e a aplicação de monitoramento em espaço de usuário \cite{linuxkernel2024}.
+No contexto de redes, eles acumulam métricas por fluxo, por interface, por processo
+ou por protocolo, e são lidos periodicamente pela aplicação de monitoramento para
+exportação a sistemas como Prometheus \cite{prometheusdocs}.
+
+Os tipos de mapa mais utilizados em aplicações de monitoramento de rede são:
+
+\textbf{\texttt{BPF\_MAP\_TYPE\_HASH}.}
+Tabela de dispersão de propósito geral indexada por chave arbitrária.
+Em monitoramento de rede, é utilizada para rastrear estados de conexões TCP ---
+com a tupla (IP de origem, IP de destino, porta de origem, porta de destino)
+como chave --- e acumular métricas por fluxo como bytes transferidos, número de
+pacotes e latência média \cite{gregg2019}.
+
+\textbf{\texttt{BPF\_MAP\_TYPE\_PERCPU\_HASH} e \texttt{BPF\_MAP\_TYPE\_PERCPU\_ARRAY}.}
+Variantes por CPU dos tipos acima, em que cada núcleo do processador mantém sua
+própria cópia do mapa \cite{linuxkernel2024}.
+Eliminam a necessidade de operações atômicas em atualizações de contadores ---
+o custo predominante em programas XDP de alta taxa de pacotes --- e são
+consolidados pela aplicação em espaço de usuário ao agregar os valores de todas
+as CPUs \cite{gregg2020}.
+
+\textbf{\texttt{BPF\_MAP\_TYPE\_RINGBUF}.}
+Buffer circular de eventos para comunicação assíncrona de alta eficiência entre
+kernel e espaço de usuário, preferido em relação ao
+\texttt{BPF\_MAP\_TYPE\_PERF\_EVENT\_ARRAY} a partir do kernel 5.8
+\cite{linuxkernel2024}.
+Em monitoramento de rede, é utilizado para emitir registros de eventos de conexão
+--- abertura, encerramento, retransmissão --- com contexto completo para a
+aplicação de monitoramento, que os encaminha ao \texttt{ebpf\_exporter}
+\cite{ebpfexporter} ou ao Prometheus \cite{prometheusdocs}.
+
+\textbf{\texttt{BPF\_MAP\_TYPE\_LPM\_TRIE}.}
+Árvore de prefixos de comprimento mais longo (\textit{Longest Prefix Match}),
+projetada para pesquisa eficiente de endereços IP em tabelas de roteamento e
+listas de controle de acesso de rede \cite{linuxkernel2024}.
+Permite implementar em um programa XDP ou TC consultas ao estilo ``este endereço
+IP pertence à sub-rede X?'' com complexidade logarítmica em relação ao número de
+prefixos, sem necessidade de iterar sobre uma lista linear \cite{gregg2019}.
+
+A cadeia completa de coleta e exportação de métricas utilizada no minicurso combina
+esses tipos de mapa da seguinte forma: programas XDP ou TC acumulam contadores em
+mapas \texttt{PERCPU\_ARRAY}; o \texttt{ebpf\_exporter} \cite{ebpfexporter} lê
+esses mapas em intervalos configuráveis, consolida os valores por CPU e os expõe
+como métricas Prometheus \cite{prometheusdocs}; o Grafana \cite{grafanadocs}
+consome essas métricas e as exibe em dashboards de monitoramento de funções
+virtualizadas de rede \cite{alves2026tcc}.

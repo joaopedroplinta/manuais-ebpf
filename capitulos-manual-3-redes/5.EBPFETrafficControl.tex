@@ -1,7 +1,351 @@
-\chapter{eBPF e Traffic Control}
+\chapter{EBPF E TRAFFIC CONTROL}
 
-\section{TC ingress}
+O subsistema de \textit{Traffic Control} (TC) é responsável pelo enfileiramento,
+escalonamento, classificação e modelagem do tráfego de rede no kernel Linux
+(Linux Kernel Documentation, 2024). Ao contrário do XDP, que opera antes da alocação
+do \texttt{sk\_buff}, o TC intervém após a camada de enlace ter processado o quadro,
+dispondo de acesso ao contexto completo do pacote — incluindo metadados de cgroup,
+namespace e processo originador (CASSAGNES et al., 2020). Essa posição mais tardia
+na pilha implica maior overhead por pacote em comparação ao XDP nativo, mas oferece
+uma visibilidade significativamente mais rica, tornando o TC o hook preferencial para
+implementações de políticas de rede por identidade em ambientes de funções virtualizadas
+de rede e clusters Kubernetes (GREGG, 2019).
 
-\section{TC egress}
+A integração do eBPF ao TC é realizada por meio da \textit{qdisc} \texttt{clsact},
+introduzida no kernel 4.5, que expõe dois pontos de ancoragem independentes: um em
+entrada (\textit{ingress}) e outro em saída (\textit{egress}) (Linux Kernel Documentation,
+2024). Programas eBPF são anexados a esses pontos como classificadores (\texttt{cls\_bpf})
+e recebem como argumento um ponteiro para \texttt{struct \_\_sk\_buff} — uma visão
+segura e anotada do \texttt{sk\_buff} interno do kernel, que expõe campos como endereços
+IP de origem e destino, portas, protocolo, tamanho do pacote, interface de entrada e
+identificador de cgroup do processo responsável pelo fluxo (CASSAGNES et al., 2020).
 
-\section{Manipulação, Classificação e Controle de tráfego}
+\section{TC INGRESS}
+
+O ponto de ancoragem \textit{ingress} do TC é avaliado logo após a camada de enlace
+processar o quadro de entrada e antes que o kernel tome qualquer decisão de roteamento
+(Linux Kernel Documentation, 2024). Nessa posição, o programa eBPF tem acesso ao
+\texttt{sk\_buff} já inicializado — com ponteiros para os cabeçalhos L2, L3 e L4 — e pode
+inspecionar, modificar, descartar ou redirecionar o pacote antes que ele alcance a pilha
+IP (GREGG, 2019).
+
+A configuração do ponto de ancoragem \textit{ingress} utiliza a \textit{qdisc}
+\texttt{clsact}, que deve ser anexada à interface antes do carregamento do programa:
+
+\begin{lstlisting}[caption={Listing 5.1 – Configuração da qdisc clsact e anexação de programa eBPF no ingress.}, label=lst:tc-ingress-setup]
+# Adicionar a qdisc clsact a interface eth0
+tc qdisc add dev eth0 clsact
+
+# Carregar o objeto BPF e anexar ao ingress
+tc filter add dev eth0 ingress bpf da obj tc_monitor.o sec tc_ingress
+\end{lstlisting}
+
+Um programa TC \textit{ingress} recebe \texttt{struct \_\_sk\_buff} como contexto.
+O exemplo a seguir demonstra um classificador de entrada que acumula bytes recebidos
+por protocolo de camada 4 e registra eventos de novas conexões TCP em um mapa
+\texttt{BPF\_MAP\_TYPE\_RINGBUF} para exportação ao espaço de usuário:
+
+\begin{lstlisting}[caption={Listing 5.2 – Programa TC ingress que monitora bytes e novas conexões TCP.}, label=lst:tc-ingress-prog]
+#include <linux/bpf.h>
+#include <linux/pkt_cls.h>
+#include <linux/if_ether.h>
+#include <linux/ip.h>
+#include <linux/tcp.h>
+#include <bpf/bpf_helpers.h>
+#include <bpf/bpf_endian.h>
+
+struct conn_event {
+    __u32 src_ip;
+    __u32 dst_ip;
+    __u16 src_port;
+    __u16 dst_port;
+    __u32 pid;
+};
+
+struct {
+    __uint(type, BPF_MAP_TYPE_PERCPU_ARRAY);
+    __uint(max_entries, 256);
+    __type(key, __u32);
+    __type(value, __u64);
+} bytes_in SEC(".maps");
+
+struct {
+    __uint(type, BPF_MAP_TYPE_RINGBUF);
+    __uint(max_entries, 1 << 16);
+} conn_events SEC(".maps");
+
+SEC("tc_ingress")
+int monitor_ingress(struct __sk_buff *skb)
+{
+    void *data     = (void *)(long)skb->data;
+    void *data_end = (void *)(long)skb->data_end;
+
+    struct ethhdr *eth = data;
+    if ((void *)(eth + 1) > data_end)
+        return TC_ACT_OK;
+
+    if (eth->h_proto != bpf_htons(ETH_P_IP))
+        return TC_ACT_OK;
+
+    struct iphdr *ip = (void *)(eth + 1);
+    if ((void *)(ip + 1) > data_end)
+        return TC_ACT_OK;
+
+    /* Acumula bytes por protocolo L4 */
+    __u32 proto  = ip->protocol;
+    __u64 nbytes = data_end - data;
+    __u64 *cnt   = bpf_map_lookup_elem(&bytes_in, &proto);
+    if (cnt)
+        *cnt += nbytes;
+
+    /* Registra novas conexoes TCP (flag SYN) */
+    if (proto == IPPROTO_TCP) {
+        struct tcphdr *tcp = (void *)(ip + 1);
+        if ((void *)(tcp + 1) > data_end)
+            return TC_ACT_OK;
+
+        if (tcp->syn && !tcp->ack) {
+            struct conn_event *ev =
+                bpf_ringbuf_reserve(&conn_events,
+                                    sizeof(*ev), 0);
+            if (ev) {
+                ev->src_ip   = ip->saddr;
+                ev->dst_ip   = ip->daddr;
+                ev->src_port = bpf_ntohs(tcp->source);
+                ev->dst_port = bpf_ntohs(tcp->dest);
+                ev->pid      = bpf_get_current_pid_tgid() >> 32;
+                bpf_ringbuf_submit(ev, 0);
+            }
+        }
+    }
+
+    return TC_ACT_OK;
+}
+
+char LICENSE[] SEC("license") = "GPL";
+\end{lstlisting}
+
+O código de retorno \texttt{TC\_ACT\_OK} instrui o kernel a continuar o processamento
+normal do pacote. As demais ações possíveis são \texttt{TC\_ACT\_SHOT} (descartar o
+pacote), \texttt{TC\_ACT\_REDIRECT} (redirecionar para outra interface) e
+\texttt{TC\_ACT\_STOLEN} (consumir o pacote sem entregá-lo à pilha) (Linux Kernel
+Documentation, 2024).
+
+Em ambientes de funções virtualizadas de rede, o \textit{ingress} TC é amplamente
+utilizado para monitorar o tráfego recebido por cada função virtualizada com granularidade
+de fluxo, associando cada pacote ao cgroup da função responsável por meio do campo
+\texttt{skb->cgroup\_classid} do contexto \texttt{\_\_sk\_buff} (VENÂNCIO et al., 2021).
+Essa granularidade é inacessível ao XDP, que opera antes da inicialização dos metadados
+de cgroup no \texttt{sk\_buff} (CASSAGNES et al., 2020).
+
+\section{TC EGRESS}
+
+O ponto de ancoragem \textit{egress} do TC é avaliado após a decisão de roteamento
+e antes que o pacote seja entregue ao driver da interface de saída para transmissão
+(Linux Kernel Documentation, 2024). Nessa posição, o programa eBPF tem acesso ao
+contexto completo do \texttt{sk\_buff} de saída — incluindo o PID e o cgroup do processo
+que originou o pacote — e pode implementar políticas de saída com escopo por contêiner
+ou por função virtualizada de rede (CASSAGNES et al., 2020).
+
+A configuração do ponto de ancoragem \textit{egress} é análoga à do \textit{ingress},
+utilizando a mesma \textit{qdisc} \texttt{clsact} adicionada anteriormente:
+
+\begin{lstlisting}[caption={Listing 5.3 – Anexação de programa eBPF no egress TC.}, label=lst:tc-egress-setup]
+tc filter add dev eth0 egress bpf da obj tc_monitor.o sec tc_egress
+\end{lstlisting}
+
+O exemplo a seguir demonstra um programa TC \textit{egress} que mede a taxa de
+transmissão por cgroup e impõe um limite máximo de bytes por segundo descartando
+pacotes excedentes — implementando uma forma simples de \textit{policing} de saída sem
+dependência de módulos externos:
+
+\begin{lstlisting}[caption={Listing 5.4 – Programa TC egress com monitoramento de bytes por cgroup.}, label=lst:tc-egress-prog]
+#include <linux/bpf.h>
+#include <linux/pkt_cls.h>
+#include <bpf/bpf_helpers.h>
+
+#define RATE_LIMIT_BYTES 1250000ULL  /* ~10 Mbps por cgroup */
+
+struct rate_state {
+    __u64 bytes;
+    __u64 last_ts;
+};
+
+struct {
+    __uint(type, BPF_MAP_TYPE_HASH);
+    __uint(max_entries, 1024);
+    __type(key, __u64);           /* cgroup id */
+    __type(value, struct rate_state);
+} egress_rate SEC(".maps");
+
+SEC("tc_egress")
+int monitor_egress(struct __sk_buff *skb)
+{
+    __u64 cgid = bpf_skb_cgroup_id(skb);
+    __u64 now  = bpf_ktime_get_ns();
+    __u32 pkt_len = skb->len;
+
+    struct rate_state *rs =
+        bpf_map_lookup_elem(&egress_rate, &cgid);
+
+    if (!rs) {
+        struct rate_state init = { .bytes = pkt_len,
+                                   .last_ts = now };
+        bpf_map_update_elem(&egress_rate, &cgid,
+                            &init, BPF_ANY);
+        return TC_ACT_OK;
+    }
+
+    /* Reinicia contador a cada segundo */
+    if (now - rs->last_ts > 1000000000ULL) {
+        rs->bytes   = 0;
+        rs->last_ts = now;
+    }
+
+    rs->bytes += pkt_len;
+
+    if (rs->bytes > RATE_LIMIT_BYTES)
+        return TC_ACT_SHOT;   /* descarta excedente */
+
+    return TC_ACT_OK;
+}
+
+char LICENSE[] SEC("license") = "GPL";
+\end{lstlisting}
+
+O campo \texttt{skb->len} expõe o tamanho total do pacote, incluindo cabeçalhos, sem
+necessidade de recalculá-lo a partir dos ponteiros de dados (Linux Kernel Documentation,
+2024). A \textit{helper function} \texttt{bpf\_skb\_cgroup\_id} retorna o identificador do
+cgroup v2 ao qual pertence o socket originador do pacote, permitindo aplicar políticas
+distintas a cada função virtualizada de rede ou contêiner (GREGG, 2019).
+
+Uma diferença importante entre \textit{ingress} e \textit{egress} no TC é a
+disponibilidade de informações de processo. No \textit{egress}, o pacote ainda está
+associado ao contexto do processo que o gerou, de modo que funções como
+\texttt{bpf\_get\_current\_pid\_tgid} e \texttt{bpf\_get\_current\_comm} retornam
+valores válidos para a maioria dos fluxos (GREGG, 2020). No \textit{ingress}, o
+processo originador é o emissor remoto, inacessível localmente; o cgroup do receptor
+pode ser obtido por meio de \texttt{bpf\_skb\_cgroup\_id}, mas somente após a associação
+do pacote a um socket pelo kernel (CASSAGNES et al., 2020).
+
+\section{MANIPULAÇÃO, CLASSIFICAÇÃO E CONTROLE DE TRÁFEGO}
+
+Além de coletar métricas, programas TC eBPF podem modificar ativamente os pacotes
+em trânsito — alterando cabeçalhos, remarcando campos de qualidade de serviço ou
+reescrevendo endereços — e implementar lógica de classificação e controle de tráfego
+que anteriormente exigia módulos de kernel dedicados ou ferramentas de espaço de
+usuário com overhead elevado (Linux Kernel Documentation, 2024).
+
+\subsection*{Manipulação de cabeçalhos}
+
+A \textit{helper function} \texttt{bpf\_skb\_store\_bytes} permite modificar bytes
+arbitrários do pacote diretamente no \texttt{sk\_buff}, e \texttt{bpf\_l3\_csum\_replace}
+e \texttt{bpf\_l4\_csum\_replace} atualizam os checksums dos cabeçalhos IP e TCP/UDP
+após qualquer modificação (Linux Kernel Documentation, 2024). O exemplo a seguir
+demonstra a reescrita do campo DSCP (\textit{Differentiated Services Code Point}) do
+cabeçalho IP para marcar pacotes de um cgroup específico com alta prioridade:
+
+\begin{lstlisting}[caption={Listing 5.5 – Remarcação de DSCP para pacotes de cgroup prioritário.}, label=lst:tc-dscp]
+#include <linux/bpf.h>
+#include <linux/pkt_cls.h>
+#include <linux/ip.h>
+#include <bpf/bpf_helpers.h>
+
+#define PRIO_CGID  1234ULL   /* cgroup id prioritario */
+#define DSCP_EF    0xB8      /* Expedited Forwarding (46 << 2) */
+
+SEC("tc_egress")
+int remarcar_dscp(struct __sk_buff *skb)
+{
+    if (bpf_skb_cgroup_id(skb) != PRIO_CGID)
+        return TC_ACT_OK;
+
+    /* Offset do campo TOS no cabecalho IP: 14 bytes Ethernet + 1 */
+    __u8 tos = DSCP_EF;
+    bpf_skb_store_bytes(skb, ETH_HLEN + offsetof(struct iphdr, tos),
+                        &tos, sizeof(tos), BPF_F_RECOMPUTE_CSUM);
+
+    return TC_ACT_OK;
+}
+
+char LICENSE[] SEC("license") = "GPL";
+\end{lstlisting}
+
+Essa técnica é utilizada em ambientes NFV para diferenciar o tráfego de funções
+virtualizadas de rede com requisitos de latência distintos — como funções de plano de
+controle e funções de plano de dados — sem modificar as próprias funções (VENÂNCIO et
+al., 2021).
+
+\subsection*{Classificação de tráfego}
+
+Programas TC eBPF podem classificar pacotes em classes de tráfego utilizando o
+campo \texttt{skb->tc\_classid}, que é lido pelas \textit{qdiscs} hierárquicas como
+\texttt{HTB} (\textit{Hierarchical Token Bucket}) para aplicar limites de banda
+diferenciados (Linux Kernel Documentation, 2024). Essa integração permite combinar
+a flexibilidade de programas eBPF — que podem inspecionar qualquer campo do pacote ou
+consultar mapas BPF com listas de classificação — com a maturidade dos mecanismos de
+enfileiramento existentes no TC (GREGG, 2019):
+
+\begin{lstlisting}[caption={Listing 5.6 – Classificação de pacotes por porta de destino para HTB.}, label=lst:tc-classify]
+#include <linux/bpf.h>
+#include <linux/pkt_cls.h>
+#include <linux/ip.h>
+#include <linux/tcp.h>
+#include <bpf/bpf_helpers.h>
+#include <bpf/bpf_endian.h>
+
+#define TC_H_MAKE(maj, min) (((maj) << 16) | (min))
+#define CLASS_HIGH  TC_H_MAKE(1, 10)  /* classe de alta prioridade */
+#define CLASS_LOW   TC_H_MAKE(1, 20)  /* classe de baixa prioridade */
+#define PORT_HTTP   80
+#define PORT_BACKUP 873
+
+SEC("tc_egress")
+int classificar_trafego(struct __sk_buff *skb)
+{
+    void *data     = (void *)(long)skb->data;
+    void *data_end = (void *)(long)skb->data_end;
+
+    struct iphdr *ip = data + sizeof(struct ethhdr);
+    if ((void *)(ip + 1) > data_end)
+        return TC_ACT_OK;
+
+    if (ip->protocol != IPPROTO_TCP)
+        return TC_ACT_OK;
+
+    struct tcphdr *tcp = (void *)(ip + 1);
+    if ((void *)(tcp + 1) > data_end)
+        return TC_ACT_OK;
+
+    __u16 dport = bpf_ntohs(tcp->dest);
+
+    if (dport == PORT_HTTP)
+        skb->tc_classid = CLASS_HIGH;
+    else if (dport == PORT_BACKUP)
+        skb->tc_classid = CLASS_LOW;
+
+    return TC_ACT_OK;
+}
+
+char LICENSE[] SEC("license") = "GPL";
+\end{lstlisting}
+
+\subsection*{Controle de tráfego e redirecionamento}
+
+O redirecionamento de pacotes no TC é realizado pela \textit{helper function}
+\texttt{bpf\_redirect}, análoga à usada no XDP, mas disponível com acesso ao contexto
+completo do \texttt{sk\_buff} (Linux Kernel Documentation, 2024). Isso permite
+implementar no \textit{ingress} TC uma forma de balanceamento de carga por
+\textit{software}: pacotes destinados a um endereço IP virtual são redirecionados para
+interfaces distintas com base em informações de estado mantidas em mapas BPF, sem
+necessidade de módulos de kernel adicionais (CASSAGNES et al., 2020).
+
+Em comparação com o XDP, o TC apresenta trade-offs claros: maior overhead por
+pacote devido à posição mais tardia na pilha, porém visibilidade de metadados de processo
+e cgroup inacessíveis ao XDP, suporte nativo em qualquer interface de rede sem
+dependência do driver e compatibilidade direta com as \textit{qdiscs} hierárquicas
+existentes (GREGG, 2019). Para aplicações de monitoramento de funções virtualizadas
+de rede — em que associar métricas de rede a funções específicas é um requisito central
+— o TC representa o hook de escolha, complementando o XDP em cenários de alto
+desempenho onde a granularidade por fluxo é igualmente necessária (VENÂNCIO et al.,
+2021).

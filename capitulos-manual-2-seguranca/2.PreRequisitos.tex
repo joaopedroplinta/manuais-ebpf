@@ -1,5 +1,108 @@
 \chapter{Pré-requisitos}
 
-\section{Conhecimentos necessários}
+Este capítulo descreve os conhecimentos prévios recomendados e o ambiente necessário
+para acompanhar o minicurso e reproduzir os exemplos práticos apresentados.
 
+% ----------------------------------------------------------------
+\section{Conhecimentos necessários}
+% ----------------------------------------------------------------
+
+O minicurso foi concebido para participantes com familiaridade básica com sistemas
+operacionais Linux e programação em linguagem C.
+Não é exigida experiência prévia com desenvolvimento de kernel ou com eBPF.
+Os tópicos a seguir representam a base mínima esperada.
+
+\textbf{Linha de comando Linux.}
+O participante deve ser capaz de navegar pelo sistema de arquivos, executar comandos
+com privilégio de superusuário (\texttt{sudo}), instalar pacotes com o gerenciador
+de pacotes da distribuição e redirecionar a saída de programas
+\cite{manpages2024}.
+
+\textbf{Linguagem C — nível introdutório.}
+Programas eBPF são escritos em um subconjunto restrito de C e compilados para
+\textit{bytecode} BPF \cite{linuxkernel2024}.
+É suficiente compreender tipos primitivos, ponteiros, estruturas (\texttt{struct}) e
+a diferença entre espaço de usuário e espaço de kernel.
+Conceitos avançados, como alocação dinâmica de memória ou programação
+multithread, não são necessários neste nível introdutório.
+
+\textbf{Conceitos básicos de sistemas operacionais.}
+É recomendável ter noção do que é uma chamada de sistema (\textit{syscall}),
+como processos são escalonados e qual o papel do kernel na mediação entre
+aplicações e o hardware \cite{gregg2020}.
+Esses conceitos contextualizam os pontos de ancoragem (\textit{hooks}) nos quais
+programas eBPF são inseridos.
+
+\textbf{Noções de redes.}
+Para os exemplos voltados à área de segurança de rede, é útil compreender o modelo
+de camadas TCP/IP, o que é um pacote e como endereços IP e portas identificam
+conexões \cite{gregg2019}.
+Esse conhecimento não é estritamente obrigatório para os primeiros exercícios,
+mas facilita a interpretação dos resultados obtidos.
+
+% ----------------------------------------------------------------
 \section{Ambiente Linux}
+% ----------------------------------------------------------------
+
+Todos os exemplos foram desenvolvidos e testados em ambiente Linux com kernel
+versão 5.15 ou superior, que é o mínimo recomendado para suporte estável às
+funcionalidades de eBPF utilizadas no minicurso \cite{linuxkernel2024}.
+O código-fonte e os scripts de configuração do ambiente estão disponíveis no
+repositório público do minicurso \cite{plinta2026repo}.
+
+\textbf{Distribuição recomendada.}
+Recomenda-se Ubuntu 22.04 LTS ou Debian 12, por oferecerem pacotes atualizados de
+ferramentas eBPF nos repositórios oficiais e ampla documentação de suporte.
+Outras distribuições baseadas em Debian ou em Red Hat (Fedora, RHEL 9+) são
+igualmente compatíveis, bastando adaptar os comandos de instalação de pacotes.
+
+\textbf{Dependências de software.}
+Os seguintes pacotes devem estar instalados antes do início das atividades práticas:
+
+\begin{itemize}
+  \item \texttt{clang} e \texttt{llvm} — compilador utilizado para gerar
+        \textit{bytecode} BPF a partir de código C \cite{linuxkernel2024};
+  \item \texttt{libbpf-dev} — biblioteca de suporte a programas eBPF em espaço
+        de usuário \cite{libbpf};
+  \item \texttt{bpftrace} — linguagem de rastreamento de alto nível para eBPF
+        \cite{bpftrace};
+  \item \texttt{linux-headers} — cabeçalhos do kernel necessários para compilação
+        de programas eBPF;
+  \item \texttt{make} e \texttt{gcc} — utilitários de construção (\textit{build}).
+\end{itemize}
+
+Em distribuições baseadas em Debian, a instalação pode ser realizada com:
+
+\begin{lstlisting}[language=bash]
+sudo apt update
+sudo apt install clang llvm libbpf-dev bpftrace \
+                 linux-headers-$(uname -r) make gcc
+\end{lstlisting}
+
+\textbf{Verificação de suporte do kernel.}
+Antes de executar os exemplos, é possível verificar se o sistema expõe o sistema de
+arquivos virtual \texttt{/proc} e os pontos de rastreamento necessários com o
+comando:
+
+\begin{lstlisting}[language=bash]
+ls /sys/kernel/debug/tracing/events
+\end{lstlisting}
+
+Caso o diretório não exista, o sistema de arquivos de depuração deve ser montado:
+
+\begin{lstlisting}[language=bash]
+sudo mount -t debugfs debugfs /sys/kernel/debug
+\end{lstlisting}
+
+\textbf{Uso em máquinas virtuais e contêineres.}
+O eBPF pode ser utilizado em máquinas virtuais, desde que o kernel do sistema
+convidado tenha sido compilado com as opções \texttt{CONFIG\_BPF},
+\texttt{CONFIG\_BPF\_SYSCALL} e \texttt{CONFIG\_BPF\_JIT} habilitadas
+\cite{linuxkernel2024}.
+Em contêineres Docker, é necessário que o contêiner seja iniciado com a capacidade
+(\textit{capability}) \texttt{CAP\_BPF} ou, alternativamente, em modo privilegiado
+(\texttt{--privileged}), pois operações eBPF requerem privilégios elevados
+\cite{gregg2019}.
+Para fins didáticos, recomenda-se o uso de uma máquina virtual ou de uma instalação
+nativa, que oferecem maior visibilidade sobre o sistema e evitam restrições
+impostas pelas camadas de isolamento de contêineres.

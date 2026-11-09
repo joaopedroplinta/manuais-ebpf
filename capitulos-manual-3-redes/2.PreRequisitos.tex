@@ -1,7 +1,171 @@
 \chapter{Pré-requisitos}
 
+Este capítulo descreve os conhecimentos prévios recomendados e o ambiente necessário
+para acompanhar o minicurso e reproduzir os exemplos práticos de monitoramento de
+funções virtualizadas de rede com eBPF.
+
+% ----------------------------------------------------------------
 \section{Conhecimentos necessários}
+% ----------------------------------------------------------------
 
+O minicurso foi concebido para participantes com familiaridade básica com sistemas
+operacionais Linux, programação em linguagem C e fundamentos de redes de computadores.
+Não é exigida experiência prévia com desenvolvimento de kernel, com eBPF ou com
+funções virtualizadas de rede (NFV).
+Os tópicos a seguir representam a base mínima esperada.
+
+\textbf{Linha de comando Linux.}
+O participante deve ser capaz de navegar pelo sistema de arquivos, executar comandos
+com privilégio de superusuário (\texttt{sudo}), instalar pacotes com o gerenciador
+de pacotes da distribuição e redirecionar a saída de programas para arquivos e
+para outros comandos via \textit{pipe} \cite{manpages2024}.
+
+\textbf{Linguagem C --- nível introdutório.}
+Programas eBPF são escritos em um subconjunto restrito de C e compilados para
+\textit{bytecode} BPF \cite{linuxkernel2024}.
+É suficiente compreender tipos primitivos, ponteiros, estruturas (\texttt{struct})
+e a distinção entre espaço de usuário e espaço de kernel.
+Conceitos avançados, como alocação dinâmica de memória ou programação multithread,
+não são necessários neste nível introdutório.
+
+\textbf{Fundamentos de redes TCP/IP.}
+Para os exemplos de monitoramento de rede, é necessário compreender o modelo de
+camadas TCP/IP, o conceito de pacote, como endereços IP e portas identificam
+conexões e a diferença entre protocolos orientados a conexão (TCP) e não orientados
+(UDP) \cite{gregg2019}.
+Esse conhecimento contextualiza os pontos de observação que programas eBPF ocupam
+na pilha de rede do kernel.
+
+\textbf{Conceitos básicos de sistemas operacionais.}
+É recomendável ter noção do que é uma chamada de sistema (\textit{syscall}), como
+processos são escalonados e qual o papel do kernel na mediação entre aplicações e
+o hardware \cite{gregg2020}.
+Em particular, compreender o que é um \textit{file descriptor} e como o sistema
+de arquivos virtual \texttt{/proc} expõe informações de processos é útil para
+interpretar os dados coletados pelos programas eBPF \cite{manpages2024}.
+
+\textbf{Noções de virtualização de funções de rede (NFV).}
+Os exemplos práticos são contextualizados no cenário de monitoramento de funções
+virtualizadas de rede conforme o arcabouço do ETSI NFV \cite{etsi2014}.
+Não é necessário ter experiência prévia com NFV, mas compreender que uma função
+de rede virtualizada é um software executando sobre infraestrutura de propósito
+geral --- em vez de hardware dedicado --- facilita a interpretação dos resultados
+obtidos \cite{venancio2021}.
+
+% ----------------------------------------------------------------
 \section{Ambiente Linux}
+% ----------------------------------------------------------------
 
+Todos os exemplos foram desenvolvidos e testados em ambiente Linux com kernel
+versão 5.15 ou superior, que é o mínimo recomendado para suporte estável às
+funcionalidades de eBPF utilizadas no minicurso, incluindo
+\texttt{BPF\_MAP\_TYPE\_RINGBUF} e suporte completo a BPF CO-RE
+\cite{linuxkernel2024}.
+O código-fonte e os scripts de configuração do ambiente estão disponíveis no
+repositório público do minicurso \cite{plinta2026repo}.
+
+\textbf{Distribuição recomendada.}
+Recomenda-se Ubuntu 22.04 LTS ou Debian 12, por oferecerem pacotes atualizados
+de ferramentas eBPF nos repositórios oficiais e ampla documentação de suporte.
+Outras distribuições baseadas em Debian ou em Red Hat (Fedora, RHEL 9+) são
+igualmente compatíveis, bastando adaptar os comandos de instalação de pacotes.
+
+\textbf{Uso em máquinas virtuais.}
+O eBPF pode ser utilizado em máquinas virtuais, desde que o kernel do sistema
+convidado tenha sido compilado com as opções \texttt{CONFIG\_BPF},
+\texttt{CONFIG\_BPF\_SYSCALL} e \texttt{CONFIG\_BPF\_JIT} habilitadas
+\cite{linuxkernel2024}.
+Para fins didáticos, recomenda-se o uso de uma máquina virtual com acesso
+irrestrito ao kernel, que oferece maior visibilidade sobre o sistema e evita
+restrições impostas por camadas de isolamento adicionais.
+
+\textbf{Verificação da versão do kernel.}
+Antes de iniciar as atividades práticas, recomenda-se confirmar a versão do kernel
+em execução e verificar se o sistema de arquivos de depuração está montado:
+
+\begin{lstlisting}[language=bash,
+  caption={Verificação de versão do kernel e disponibilidade de tracepoints.}]
+uname -r
+ls /sys/kernel/debug/tracing/events/syscalls | head -5
+\end{lstlisting}
+
+Caso o diretório \texttt{/sys/kernel/debug} não exista ou esteja vazio, o sistema
+de arquivos de depuração deve ser montado manualmente:
+
+\begin{lstlisting}[language=bash,
+  caption={Montagem do sistema de arquivos de depuração.}]
+sudo mount -t debugfs debugfs /sys/kernel/debug
+\end{lstlisting}
+
+% ----------------------------------------------------------------
 \section{Configuração do ambiente eBPF}
+% ----------------------------------------------------------------
+
+Esta seção descreve a instalação das dependências necessárias para compilar e
+executar os programas eBPF do minicurso.
+
+\textbf{Instalação das dependências.}
+Os seguintes pacotes devem estar presentes no sistema antes do início das
+atividades práticas:
+
+\begin{itemize}
+  \item \texttt{clang} e \texttt{llvm} --- compilador utilizado para gerar
+        \textit{bytecode} BPF a partir de código C \cite{linuxkernel2024};
+  \item \texttt{libbpf-dev} --- biblioteca de suporte a programas eBPF com
+        suporte a CO-RE \cite{libbpf};
+  \item \texttt{bpftrace} --- linguagem de rastreamento de alto nível para
+        investigação interativa \cite{bpftrace};
+  \item \texttt{bpftool} --- utilitário oficial para inspeção de programas,
+        mapas e objetos BPF carregados no kernel \cite{linuxkernel2024};
+  \item \texttt{linux-headers-\$(uname -r)} --- cabeçalhos do kernel necessários
+        para compilação de programas eBPF;
+  \item \texttt{make} e \texttt{gcc} --- utilitários de construção (\textit{build}).
+\end{itemize}
+
+Em distribuições baseadas em Debian, a instalação pode ser realizada com:
+
+\begin{lstlisting}[language=bash,
+  caption={Instalação das dependências em Ubuntu 22.04 / Debian 12.}]
+sudo apt update
+sudo apt install clang llvm libbpf-dev bpftrace bpftool \
+                 linux-headers-$(uname -r) make gcc
+\end{lstlisting}
+
+\textbf{Obtenção do repositório do minicurso.}
+Os exemplos práticos estão organizados no repositório \cite{plinta2026repo}.
+Para cloná-lo e acessar o diretório de exemplos:
+
+\begin{lstlisting}[language=bash,
+  caption={Clonagem do repositório e acesso ao diretório de exemplos.}]
+git clone https://github.com/joaopedroplinta/ebpf-scitec.git
+cd ebpf-scitec
+\end{lstlisting}
+
+\textbf{Verificação da instalação.}
+Após instalar as dependências, recomenda-se executar um programa eBPF mínimo com
+o bpftrace para confirmar que o ambiente está funcional:
+
+\begin{lstlisting}[language=bash,
+  caption={Verificação do ambiente com bpftrace.}]
+sudo bpftrace -e 'BEGIN { printf("eBPF funcionando!\n"); exit(); }'
+\end{lstlisting}
+
+A saída esperada é \texttt{eBPF funcionando!}, seguida do encerramento do processo.
+Caso ocorra erro de permissão, verifique se o comando está sendo executado com
+\texttt{sudo} ou se o usuário possui a capacidade \texttt{CAP\_BPF}
+\cite{linuxkernel2024}.
+
+\textbf{Instalação das ferramentas BCC.}
+Para os exemplos que utilizam o BCC \cite{bcc}, o pacote \texttt{bpfcc-tools}
+disponibiliza as ferramentas prontas para uso sem necessidade de compilação:
+
+\begin{lstlisting}[language=bash,
+  caption={Instalação das ferramentas BCC.}]
+sudo apt install bpfcc-tools python3-bpfcc
+\end{lstlisting}
+
+Após a instalação, ferramentas como \texttt{execsnoop-bpfcc} e
+\texttt{opensnoop-bpfcc} podem ser executadas diretamente, e os scripts de
+monitoramento de rede --- como \texttt{tcpconnect-bpfcc} e
+\texttt{tcpretrans-bpfcc} --- estão disponíveis para uso imediato nos exemplos
+práticos do minicurso.
