@@ -1,5 +1,38 @@
-\chapter{Troubleshooting}
+\chapter{Troubleshooting}\label{cap:troubleshooting}
+
+Este capítulo reúne os problemas mais prováveis ao seguir o manual e os limites da técnica. Os erros descritos foram observados nos testes em Ubuntu 26.04 com kernel 7.0.
 
 \section{Impacto de performance}
 
+Um programa eBPF roda toda vez que o evento ao qual está anexado ocorre, então o custo depende da frequência do evento e do trabalho feito a cada execução. Algumas regras práticas:
+
+\begin{itemize}
+  \item \textbf{Prefira eventos raros.} Um \textit{tracepoint} em \texttt{execve} dispara algumas vezes por segundo. Um em \texttt{raw\_syscalls:sys\_enter} dispara a cada chamada de sistema do host inteiro, o que pode chegar a milhões por segundo.
+  \item \textbf{Agregue no kernel.} Contar com \texttt{count()} ou \texttt{hist()} custa muito menos do que imprimir cada evento com \texttt{printf}, porque o espaço do usuário só lê o resultado ao final.
+  \item \textbf{Prefira amostragem a rastrear tudo.} Para saber onde a CPU é gasta, \texttt{profile:hz:99} tem custo fixo, independente da carga.
+  \item \textbf{Cuidado com ferramentas pesadas.} O \texttt{memleak} instrumenta cada alocação do processo, e o \texttt{kretprobe} custa mais que o \texttt{kprobe}. Use-os por períodos curtos e, se possível, fora de produção.
+\end{itemize}
+
+Para medir o custo de uma sonda, rode a carga de trabalho com e sem ela e compare a latência ou a vazão. O resultado do experimento citado no capítulo \ref{cap:introducao} vale para o coletor testado, não para qualquer programa.
+
 \section{Limitações}
+
+\textbf{Permissões.} Carregar programas eBPF exige \texttt{root} (ou as capacidades \texttt{CAP\_BPF} e \texttt{CAP\_PERFMON}). Sem isso, as ferramentas falham com erro de permissão. Em contêineres, o acesso costuma ser bloqueado por padrão.
+
+\textbf{BCC e cabeçalhos do kernel.} O BCC compila o programa na hora da execução, a partir dos cabeçalhos do kernel em uso. No kernel 7.0 do ambiente de teste, 11 das 14 ferramentas testadas do BCC falharam ao compilar, com erros como \texttt{static assertion failed} em \texttt{include/linux/fs.h}. As versões \texttt{-libbpf}, que usam CO-RE, funcionaram em 13 das 14. Se uma ferramenta do BCC não compilar, procure a equivalente com o sufixo \texttt{-libbpf}.
+
+\textbf{Argumentos diferentes entre versões.} A mesma ferramenta pode aceitar argumentos distintos na versão BCC e na \texttt{libbpf}. O \texttt{ext4slower-libbpf 10}, por exemplo, falhou com \texttt{Too many arguments}. Consulte sempre \texttt{--help} da versão instalada.
+
+\textbf{Avisos do bpftrace.} Ao usar USDT, o \texttt{bpftrace} 0.25.0 imprime avisos de compilação vindos do \texttt{vmlinux.h} (\texttt{declaration does not declare anything}). São inofensivos e a opção \texttt{--no-warnings} não os suprime. Já um programa USDT de várias linhas, salvo em arquivo, fez o \texttt{bpftrace} abortar com \texttt{Assertion failed}. Escreva \textit{scripts} USDT em uma única linha com \texttt{-e}.
+
+\textbf{Filtros por nome e por PID em programas com \textit{threads}.} O campo \texttt{COMM} traz o nome da \textit{thread}, que pode ser diferente do nome do programa: o servidor do Python apareceu como \texttt{Thread-3 (proce}, e \texttt{opensnoop-libbpf -n python3} não mostrou nada. O \texttt{syscount-libbpf -p PID} contou só a \textit{thread} principal. Filtre por PID no \texttt{opensnoop} e, para o \texttt{syscount}, use o \texttt{bpftrace} com \texttt{/pid == N/}.
+
+\textbf{Porta já em uso.} Se o serviço de teste encerra sem erro visível, a porta provavelmente está ocupada, como a 8080 pelo \texttt{docker-proxy} no ambiente de teste. Confira com \texttt{ss -ltnp} e redirecione a saída do servidor para um arquivo para ver a mensagem de erro.
+
+\textbf{Sondas que não existem.} Uma sonda pode estar ausente porque o pacote foi compilado sem ela. O erro típico é \texttt{No matches for usdt}. Liste as sondas com \texttt{bpftrace -l} antes de escrever o programa.
+
+\textbf{Funções internas mudam.} Um \textit{kprobe} depende do nome e dos argumentos de uma função interna do kernel, que não são uma interface estável. Se um programa deixar de funcionar após uma atualização, verifique primeiro se a função ainda existe com \texttt{bpftrace -l 'kprobe:nome*'}.
+
+\textbf{Contadores de hardware.} Eventos como falhas de cache dependem do processador e geralmente não estão disponíveis em máquinas virtuais.
+
+\textbf{O que o eBPF não vê.} A coleta enxerga o que passa pelo kernel. Eventos internos de uma aplicação, como o tempo de uma consulta SQL, exigem sondas \texttt{uprobe} ou USDT, ou instrumentação no próprio código.

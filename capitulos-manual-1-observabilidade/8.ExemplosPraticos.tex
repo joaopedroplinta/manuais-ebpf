@@ -1,7 +1,81 @@
-\chapter{Exemplos Práticos}
+\chapter{Exemplos Práticos}\label{cap:exemplos}
+
+Este capítulo reúne três cenários que combinam as ferramentas dos capítulos anteriores. Cada um parte de uma pergunta de diagnóstico e usa só comandos já apresentados, de modo que o leitor possa reproduzi-los em um terminal com dois painéis: um para a ferramenta de coleta e outro para gerar a atividade observada. Todos exigem \texttt{root} e foram testados no ambiente descrito no capítulo \ref{cap:monitoramento}.
 
 \section{Monitoramento de processos}
 
+\textbf{Pergunta:} que processos de vida curta estão sendo criados no sistema? Um \textit{script} que roda por milissegundos, disparado pelo \texttt{cron} ou por um serviço, não aparece em um \texttt{ps} nem em uma amostra de \textit{polling}.
+
+No primeiro terminal, inicie o rastreamento de \texttt{execve} e deixe-o rodando:
+
+\begin{lstlisting}
+sudo execsnoop-libbpf
+\end{lstlisting}
+
+No segundo terminal, crie alguns processos curtos:
+
+\begin{lstlisting}
+for i in 1 2 3; do date > /dev/null; sleep 0.2; done
+\end{lstlisting}
+
+O primeiro terminal passa a listar cada processo criado, com o PID, o processo pai e os argumentos. Processos que duram milissegundos, como esses, passam despercebidos pelo \texttt{ps}. Nos testes, o \texttt{execsnoop} listou os \texttt{sleep} e \texttt{date} do laço, mas não necessariamente todos eles: em uma máquina ocupada, parte dos eventos pode ficar de fora da saída. Para saber \textit{quem} está criando processos em maior volume, em vez de listar cada um, troque a ferramenta por uma contagem:
+
+\begin{lstlisting}
+sudo bpftrace -e 'tracepoint:syscalls:sys_enter_execve { @[comm] = count(); }'
+\end{lstlisting}
+
+Ao encerrar com \texttt{Ctrl+C}, o \texttt{bpftrace} imprime o mapa com o total de execuções por nome do processo que chamou \texttt{execve}, incluindo outros programas ativos na máquina (no teste apareceram o \texttt{code} e o \texttt{bash}). Um número alto em um \textit{script} de verificação periódica é um indício de que ele cria processos demais para o que faz.
+
 \section{Análise de chamadas de sistema}
 
+\textbf{Pergunta:} o que um programa está pedindo ao kernel? Aqui o alvo é o servidor HTTP embutido do Python. Inicie-o no primeiro terminal. Os exemplos usam a porta 8099 porque a 8080 costuma estar ocupada (no ambiente de teste, ela pertencia a um \texttt{docker-proxy}, e o servidor encerrava sem avisar). Confira com \texttt{ss -ltnp} se a porta escolhida está livre:
+
+\begin{lstlisting}
+python3 -m http.server 8099
+\end{lstlisting}
+
+No segundo terminal, descubra o PID do servidor e observe os arquivos que ele abre enquanto atende requisições:
+
+\begin{lstlisting}
+PID=$(pgrep -f "http.server 8099")
+sudo opensnoop-libbpf -p $PID
+\end{lstlisting}
+
+Em um terceiro terminal, faça requisições com \texttt{curl http://localhost:8099/}. O \texttt{opensnoop} pode mostrar o servidor abrindo o diretório pedido (em uma das duas rodadas de teste apareceu \texttt{/tmp/}; na outra, a saída ficou vazia, então não conte com ele para ver todas as aberturas). Repare na coluna \texttt{COMM}: ela traz o nome da \textit{thread} que atendeu a requisição (por exemplo, \texttt{Thread-3 (proce}), e não \texttt{python3}. Por isso filtrar por nome (\texttt{-n python3}) não encontra nada, e o filtro por PID (\texttt{-p}) é o correto.
+
+Para a visão agregada, o \texttt{syscount} mostra quais chamadas são mais feitas, sem interromper o processo, o que o \texttt{strace} não consegue evitar:
+
+\begin{lstlisting}
+sudo syscount-libbpf -i 5
+\end{lstlisting}
+
+Sem filtro, a saída cobre o sistema inteiro (no teste, \texttt{futex}, \texttt{ioctl}, \texttt{ppoll} e \texttt{write} lideraram) e serve para ver o perfil geral do host. A opção \texttt{-p PID} existe, mas nos testes ela contou apenas a \textit{thread} principal do servidor, que só aparecia em \texttt{poll}, e deixou de fora as \textit{threads} que atendem as requisições. Para programas com várias \textit{threads}, prefira o \texttt{bpftrace}, que permite filtrar por \texttt{pid}, o identificador do processo inteiro. No teste, ele contou as chamadas da \textit{thread} principal e de cada \textit{thread} de atendimento (cerca de 200 por \textit{thread} em três requisições):
+
+\begin{lstlisting}
+sudo bpftrace -e 'tracepoint:raw_syscalls:sys_enter /pid == '$PID'/ { @[comm] = count(); }'
+\end{lstlisting}
+
 \section{Rastreamento de uma aplicação}
+
+\textbf{Pergunta:} quem se conecta ao serviço, por quanto tempo e com quantos bytes? Com o mesmo servidor na porta 8099, rode o \texttt{tcplife}, que registra uma linha ao fim de cada conexão:
+
+\begin{lstlisting}
+sudo tcplife-libbpf -L 8099
+\end{lstlisting}
+
+Gere conexões em outro terminal:
+
+\begin{lstlisting}
+for i in $(seq 1 5); do curl -s http://localhost:8099/ > /dev/null; done
+\end{lstlisting}
+
+Cada linha traz o processo, os endereços e portas, os bytes enviados e recebidos e a duração. Conexões longas ou com muitos bytes se destacam do conjunto. Para ver também quem \textit{abre} conexões a partir da máquina, e não só as recebidas, use o \texttt{tcpconnect-libbpf} em paralelo.
+
+Esses comandos observam o serviço de fora, pelo que o kernel vê. Para olhar por dentro de um processo Python, sem alterá-lo, use a sonda USDT do interpretador (seção \ref{sec:uprobes} e capítulo \ref{cap:instrumentacao}). O comando a seguir lista os módulos importados por qualquer programa Python, e ajuda a explicar um início lento:
+
+\begin{lstlisting}
+sudo bpftrace -e 'usdt:/usr/bin/python3.14:python:import__find__load__start {
+    printf("%s\n", str(arg0)); }'
+\end{lstlisting}
+
+Em outro terminal, execute \texttt{python3 -c "import json, csv"} e observe os módulos aparecerem na ordem em que o interpretador os carrega. Para transformar uma dessas medidas em uma série contínua em um painel, siga o caminho do capítulo \ref{cap:coleta}.
