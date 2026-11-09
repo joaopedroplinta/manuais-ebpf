@@ -1,7 +1,167 @@
 \chapter{Exemplos Práticos}
+\label{cap:exemplos-seguranca}
 
+Este capítulo reúne três cenários de investigação que combinam as ferramentas
+apresentadas no Capítulo~\ref{cap:ferramentas-seguranca} --- BCC e bpftrace ---
+com as técnicas de detecção do Capítulo~\ref{cap:deteccao}. Cada cenário parte de
+uma pergunta de segurança, mostra os comandos para respondê-la e indica como
+interpretar o resultado. Todos os comandos exigem \texttt{root} e foram pensados
+para uma máquina de laboratório, nunca para um sistema em produção sem
+autorização. Os nomes das ferramentas BCC seguem o sufixo \texttt{-bpfcc} usado
+pelos pacotes do Ubuntu; em outras distribuições, o sufixo pode não existir.
+
+% ----------------------------------------------------------------
 \section{Monitoramento de processos e arquivos}
+\label{sec:ex-processos-arquivos}
+% ----------------------------------------------------------------
 
+\textbf{Pergunta:} que processos estão sendo executados e quem está tentando ler
+arquivos de credenciais?
+
+O ponto de partida é o \texttt{execsnoop}, que registra cada \texttt{execve} com
+PID, PPID e linha de comando. Em um terminal, deixe-o em execução; em outro, rode
+comandos quaisquer e veja-os aparecer.
+
+% TODO: validar com sudo
+\begin{lstlisting}[language=bash, caption={Execuções de processos com o \texttt{execsnoop} do BCC.}]
+sudo execsnoop-bpfcc
+\end{lstlisting}
+
+Para os arquivos, o \texttt{opensnoop} lista cada abertura. Como a saída é
+volumosa, filtre pelos caminhos sensíveis:
+
+% TODO: validar com sudo
+\begin{lstlisting}[language=bash, caption={Aberturas de arquivos sensíveis com o \texttt{opensnoop}.}]
+sudo opensnoop-bpfcc | grep --line-buffered -E '/etc/(shadow|passwd)'
+\end{lstlisting}
+
+Se o objetivo é alertar apenas sobre um arquivo específico, um programa bpftrace
+filtra no próprio kernel, reduzindo o volume de eventos. É o mesmo programa do
+Capítulo~\ref{cap:ferramentas-seguranca}; salve-o como \texttt{shadow.bt}:
+
+% TODO: validar com sudo
+\begin{lstlisting}[language=C, caption={\texttt{shadow.bt}: alerta de abertura de \texttt{/etc/shadow}.}]
+tracepoint:syscalls:sys_enter_openat
+/str(args->filename) == "/etc/shadow"/
+{
+    printf("[ALERTA] %s (pid=%d uid=%d) tentou abrir /etc/shadow\n",
+           comm, pid, uid);
+}
+\end{lstlisting}
+
+% TODO: validar com sudo
+\begin{lstlisting}[language=bash, caption={Execução do alerta e geração de um evento de teste.}]
+sudo bpftrace shadow.bt
+# em outro terminal:
+cat /etc/shadow
+\end{lstlisting}
+
+Executado por um usuário comum, o \texttt{cat /etc/shadow} falha com ``Permissão
+negada'', mas o alerta deve aparecer mesmo assim: o \textit{tracepoint}
+\texttt{sys\_enter\_openat} dispara na entrada da chamada de sistema, antes de o
+kernel decidir se o acesso é permitido. Isso é útil, pois tentativas malsucedidas
+também indicam reconhecimento.
+
+O ponto de atenção está nos falsos positivos: processos legítimos, como
+\texttt{sshd} e \texttt{login}, leem esses arquivos o tempo todo. Em um uso real,
+acrescente ao predicado uma lista do que é esperado (\texttt{comm}) e alerte
+apenas sobre o resto.
+
+% ----------------------------------------------------------------
 \section{Rastreamento de chamadas de sistema}
+\label{sec:ex-syscalls}
+% ----------------------------------------------------------------
 
+\textbf{Pergunta:} que chamadas de sistema um processo suspeito está usando, e
+alguém está usando chamadas associadas a escalonamento de privilégios ou
+injeção?
+
+Primeiro, uma visão geral: contar as chamadas por processo mostra quem é o mais
+ativo e dá uma linha de base para a detecção de anomalias do
+Capítulo~\ref{cap:deteccao}. O mapa é impresso ao encerrar com \texttt{Ctrl-C}.
+
+% TODO: validar com sudo
+\begin{lstlisting}[language=bash, caption={Contagem de chamadas de sistema por processo.}]
+sudo bpftrace -e 'tracepoint:raw_syscalls:sys_enter { @[comm] = count(); }'
+\end{lstlisting}
+
+Em seguida, monitore chamadas específicas. O programa abaixo, também do
+Capítulo~\ref{cap:ferramentas-seguranca}, alerta sobre \texttt{ptrace} por
+usuários não privilegiados. Salve-o como \texttt{ptrace.bt}:
+
+% TODO: validar com sudo
+\begin{lstlisting}[language=C, caption={\texttt{ptrace.bt}: uso de \texttt{ptrace} por usuários não root.}]
+tracepoint:syscalls:sys_enter_ptrace
+/uid != 0/
+{
+    printf("[ALERTA] ptrace por %s (pid=%d uid=%d) -> pid alvo: %d\n",
+           comm, pid, uid, args->pid);
+}
+\end{lstlisting}
+
+Para gerar um evento de teste, use o \texttt{strace}, que se apoia em
+\texttt{ptrace}:
+
+% TODO: validar com sudo
+\begin{lstlisting}[language=bash, caption={Execução do alerta e geração de um evento de teste.}]
+sudo bpftrace ptrace.bt
+# em outro terminal, como usuário comum:
+strace -f true
+\end{lstlisting}
+
+A carga de módulos de kernel é outra chamada que merece alerta permanente, por
+ser o caminho clássico de instalação de \textit{rootkits}
+(Capítulo~\ref{cap:deteccao}). Em condições normais ela é rara, então qualquer
+disparo merece atenção:
+
+% TODO: validar com sudo
+\begin{lstlisting}[language=bash, caption={Alerta de carga de módulos de kernel.}]
+sudo bpftrace -e 'tracepoint:syscalls:sys_enter_finit_module {
+    printf("[ALERTA] %s (pid=%d uid=%d) carregou um modulo\n", comm, pid, uid);
+}'
+\end{lstlisting}
+
+Como em qualquer filtro baseado em nomes de processo, \texttt{comm} é controlado
+pelo próprio processo e pode ser falsificado. Para decisões de bloqueio, prefira
+critérios que o atacante não controle, como o UID ou o cgroup.
+
+% ----------------------------------------------------------------
 \section{Detecção de conexões suspeitas}
+\label{sec:ex-conexoes}
+% ----------------------------------------------------------------
+
+\textbf{Pergunta:} que processos estão abrindo conexões de saída, e para onde?
+
+O \texttt{tcpconnect} registra cada nova conexão TCP de saída com PID, processo,
+endereço e porta de destino:
+
+% TODO: validar com sudo
+\begin{lstlisting}[language=bash, caption={Conexões TCP de saída com o \texttt{tcpconnect}.}]
+sudo tcpconnect-bpfcc
+\end{lstlisting}
+
+Em outro terminal, gere uma conexão para observar o registro. O exemplo usa o
+recurso \texttt{/dev/tcp} do Bash para abrir uma conexão local sem depender de
+outras ferramentas:
+
+% TODO: validar com sudo
+\begin{lstlisting}[language=bash, caption={Geração de uma conexão de teste.}]
+bash -c 'exec 3<>/dev/tcp/127.0.0.1/22'
+\end{lstlisting}
+
+Para uma visão que não depende do BCC, o \textit{tracepoint}
+\texttt{sys\_enter\_connect} também registra as tentativas, ainda que sem o
+endereço decodificado:
+
+% TODO: validar com sudo
+\begin{lstlisting}[language=bash, caption={Tentativas de conexão com bpftrace.}]
+sudo bpftrace -e 'tracepoint:syscalls:sys_enter_connect {
+    printf("%s (pid=%d uid=%d) chamou connect()\n", comm, pid, uid);
+}'
+\end{lstlisting}
+
+Para interpretar a saída, procure conexões fora do padrão: processos que nunca
+deveriam usar a rede, como um servidor de banco de dados abrindo conexões de
+saída, e repetições em intervalos regulares para o mesmo destino, característica
+de \textit{beaconing} (Capítulo~\ref{cap:deteccao}). O \texttt{tcpconnect} não
+diz se a conexão é maliciosa; ele fornece a evidência para a investigação.

@@ -1,3 +1,24 @@
 \chapter{Conclusão}
+\label{cap:conclusao-seguranca}
 
+Este manual percorreu o eBPF sob a ótica da segurança. Partimos dos fundamentos
+(Capítulos~\ref{cap:introducao-seguranca} a~\ref{cap:kernel-seguranca}),
+passamos pelos mecanismos que o kernel oferece para controle ativo, como LSM,
+\textit{cgroup hooks} e seccomp (Capítulo~\ref{cap:mecanismos}), e pelas técnicas
+de detecção e auditoria (Capítulo~\ref{cap:deteccao}). Em seguida, vimos as
+ferramentas que materializam essas técnicas (Capítulo~\ref{cap:ferramentas-seguranca})
+e como elas se estendem a contêineres e Kubernetes (Capítulo~\ref{cap:containers}).
 
+O Capítulo~\ref{cap:exemplos-seguranca} reuniu essas peças em três cenários de
+investigação, e o Capítulo~\ref{cap:seguranca-ebpf} lembrou que o eBPF também é
+superfície de ataque: os mesmos privilégios que o tornam poderoso exigem
+\texttt{CAP\_BPF} restrito, o \textit{verifier} ativo e atenção às limitações de
+cada ferramenta. Detectar e bloquear com eBPF só é confiável quando o próprio
+mecanismo é protegido.
+
+Os comandos do Capítulo~\ref{cap:exemplos-seguranca} estão reunidos no script
+\texttt{testes/08-seguranca-exemplos.sh}, na pasta \texttt{testes/} do repositório,
+para serem executados em uma máquina de laboratório com \texttt{sudo}. Quem for
+adiante pode combinar o que aprendeu aqui com o Manual~1, de observabilidade,
+para enviar os eventos de segurança a um painel, ou ler a documentação do Falco e
+do Tetragon para levar essas regras a um ambiente real.
