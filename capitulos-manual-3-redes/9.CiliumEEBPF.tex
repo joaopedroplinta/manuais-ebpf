@@ -1,9 +1,270 @@
 \chapter{Cilium e eBPF}
+\label{cap:cilium}
 
+O Cilium é um projeto de código aberto que implementa rede, segurança e
+observabilidade para Kubernetes usando eBPF como base \cite{ciliumdocs}. Ele é o
+exemplo mais completo do que o capítulo \ref{cap:k8s} descreveu em termos gerais: um
+plugin CNI que anexa programas eBPF a cada \textit{pod}, substitui o
+\texttt{kube-proxy}, aplica políticas por identidade e expõe os fluxos observados por
+meio do Hubble \cite{hubbledocs}.
+
+\textbf{Aviso de escopo.} Assim como no capítulo anterior, este capítulo é
+\textbf{conceitual}. Não havia cluster Kubernetes, \texttt{kubectl}, \texttt{kind} nem
+a CLI do Cilium na máquina em que o manual foi escrito. Nenhum comando deste capítulo
+foi executado; as formas e as opções foram tiradas da documentação oficial
+\cite{ciliumdocs, hubbledocs} e podem mudar entre versões. Antes de usar, confira a
+documentação da versão instalada. Os manifestos YAML foram verificados apenas quanto à
+sintaxe.
+
+% ----------------------------------------------------------------
 \section{Cilium como CNI}
+% ----------------------------------------------------------------
 
+\subsection*{Componentes}
+
+A arquitetura do Cilium tem poucas peças \cite{ciliumdocs}:
+
+\begin{itemize}
+  \item o \textbf{agente} (\texttt{cilium-agent}), executado como \texttt{DaemonSet},
+        isto é, um por nó. Ele recebe do Kubernetes os \textit{pods}, serviços e
+        políticas, compila e carrega os programas eBPF e mantém os mapas BPF;
+  \item o \textbf{plugin CNI}, invocado pelo \textit{kubelet} a cada criação de
+        \textit{pod}, que aciona o agente (conforme a operação \texttt{ADD} da seção
+        CNI do capítulo \ref{cap:k8s});
+  \item o \textbf{operador}, responsável por tarefas de escopo de cluster, como a
+        alocação de blocos de endereços;
+  \item o \textbf{Hubble}, camada de observabilidade, apresentada adiante.
+\end{itemize}
+
+\subsection*{Instalação}
+
+A forma mais direta de instalar o Cilium em um cluster novo é a CLI do projeto. O
+bloco a seguir é um \textbf{comando de cluster, não executado}:
+
+\begin{lstlisting}[language=bash, caption={Listing 9.1 – Instalação e verificação do Cilium com a CLI (comando de cluster, não executado).}, label=lst:cilium-install]
+# TODO: validar em um cluster Kubernetes
+cilium install
+cilium status --wait
+\end{lstlisting}
+
+Alternativamente, o Cilium é instalado com Helm, o que permite fixar a versão e ativar
+funcionalidades por parâmetros. Os valores abaixo ativam a substituição do
+\texttt{kube-proxy} e o Hubble; os nomes de parâmetros mudam entre versões, e o
+\texttt{kubeProxyReplacement} exige que o cluster tenha sido criado sem o
+\texttt{kube-proxy} ou que ele seja removido:
+
+\begin{lstlisting}[language=bash, caption={Listing 9.2 – Instalação via Helm com Hubble e substituição do kube-proxy (comando de cluster, não executado).}, label=lst:cilium-helm]
+# TODO: validar em um cluster Kubernetes
+helm repo add cilium https://helm.cilium.io/
+helm install cilium cilium/cilium --namespace kube-system \
+     --set kubeProxyReplacement=true \
+     --set hubble.relay.enabled=true \
+     --set hubble.ui.enabled=true
+\end{lstlisting}
+
+\subsection*{O que o Cilium carrega no kernel}
+
+Em cada nó, o agente anexa programas eBPF principalmente nos pontos estudados nos
+capítulos \ref{cap:xdp} e \ref{cap:tc}: TC (\textit{ingress} e \textit{egress}) nas
+interfaces dos \textit{pods} e do nó, XDP opcionalmente na interface externa para
+balanceamento, e programas de \textit{cgroup} para a tradução de serviços no
+\texttt{connect()} (Listing \ref{lst:k8s-connect4}) \cite{ciliumdocs}.
+
+Esses programas são visíveis com as mesmas ferramentas do restante do manual. Os
+comandos a seguir são \textbf{executáveis em um nó} (com privilégio de administrador),
+mas só produzem resultado onde o Cilium estiver instalado; a saída, portanto, não é
+reproduzida:
+
+\begin{lstlisting}[language=bash, caption={Listing 9.3 – Inspeção dos programas do Cilium em um nó com bpftool (requer root em um nó com Cilium).}, label=lst:cilium-bpftool]
+# TODO: validar em um no com Cilium
+sudo bpftool prog show | grep -i cil
+sudo bpftool net show
+sudo bpftool map show | head
+\end{lstlisting}
+
+O \texttt{bpftool net show} lista os programas XDP e TC anexados a cada interface. Em
+um nó com Cilium, espera-se encontrar programas TC nas interfaces dos \textit{pods}
+(nomes iniciados por \texttt{lxc}) e na interface do nó; a ferramenta confirma na
+prática o que a seção anterior descreveu, e é um bom exercício comparar o que ela
+lista com o que o capítulo \ref{cap:tc} ensinou a anexar manualmente.
+
+% ----------------------------------------------------------------
 \section{Network Policies}
+% ----------------------------------------------------------------
 
+O Cilium aceita a \texttt{NetworkPolicy} padrão do Kubernetes (Listing
+\ref{lst:k8s-netpol}) e oferece o recurso próprio \texttt{CiliumNetworkPolicy}, mais
+expressivo \cite{ciliumdocs}. A diferença central está na forma como as políticas são
+aplicadas. O Cilium atribui a cada \textit{pod} uma \textbf{identidade de segurança},
+derivada do conjunto de rótulos relevantes, e a identidade viaja com o pacote
+(por exemplo, em um campo do encapsulamento ou consultada em mapa no destino). A regra
+de política, no fim, é uma entrada de mapa BPF do tipo \textit{(identidade de origem,
+porta, protocolo) $\rightarrow$ permitir}, e não uma lista de endereços IP.
+
+Duas consequências práticas merecem destaque: a política acompanha o \textit{pod} quando
+ele é recriado com outro endereço, e a verificação tem custo praticamente
+independente do número de \textit{pods} \cite{ciliumdocs}.
+
+O manifesto a seguir é um \textbf{exemplo de manifesto}, \textbf{não aplicado}. Ele
+equivale ao Listing \ref{lst:k8s-netpol}, mas acrescenta uma regra de camada 7:
+somente requisições \texttt{GET} em caminhos que começam por \texttt{/api/}.
+
+\begin{lstlisting}[caption={Listing 9.4 – CiliumNetworkPolicy com regra HTTP na camada 7 (exemplo de manifesto).}, label=lst:cilium-cnp]
+apiVersion: cilium.io/v2
+kind: CiliumNetworkPolicy
+metadata:
+  name: api-somente-get
+  namespace: loja
+spec:
+  endpointSelector:
+    matchLabels:
+      app: api
+  ingress:
+    - fromEndpoints:
+        - matchLabels:
+            app: web
+      toPorts:
+        - ports:
+            - port: "8080"
+              protocol: TCP
+          rules:
+            http:
+              - method: "GET"
+                path: "/api/.*"
+\end{lstlisting}
+
+A regra de camada 7 tem um custo que a de camada 3/4 não tem: o Cilium precisa
+\textbf{interpretar o protocolo de aplicação}, e para isso redireciona o tráfego
+afetado a um \textit{proxy} (baseado em Envoy) em vez de decidir apenas no programa
+eBPF \cite{ciliumdocs}. É uma troca consciente entre expressividade e desempenho:
+use a regra de camada 7 apenas onde a distinção por método ou caminho for realmente
+necessária.
+
+Também é possível controlar a \textbf{saída} (\textit{egress}) por nome de domínio,
+útil para permitir que uma aplicação acesse um serviço externo específico sem
+manter listas de IP. O Cilium resolve essa regra observando as respostas DNS do próprio
+\textit{pod} \cite{ciliumdocs}:
+
+\begin{lstlisting}[caption={Listing 9.5 – Política de saída por nome de domínio (exemplo de manifesto).}, label=lst:cilium-fqdn]
+apiVersion: cilium.io/v2
+kind: CiliumNetworkPolicy
+metadata:
+  name: web-saida-dns
+  namespace: loja
+spec:
+  endpointSelector:
+    matchLabels:
+      app: web
+  egress:
+    - toEndpoints:
+        - matchLabels:
+            k8s:io.kubernetes.pod.namespace: kube-system
+            k8s:k8s-app: kube-dns
+      toPorts:
+        - ports:
+            - port: "53"
+              protocol: ANY
+          rules:
+            dns:
+              - matchPattern: "*"
+    - toFQDNs:
+        - matchName: "api.exemplo.com.br"
+      toPorts:
+        - ports:
+            - port: "443"
+              protocol: TCP
+\end{lstlisting}
+
+A primeira regra de saída libera as consultas ao DNS do cluster, que é pré-requisito
+para a regra \texttt{toFQDNs} funcionar, já que é a observação dessas respostas que
+informa ao Cilium quais endereços correspondem ao nome. O domínio
+\texttt{api.exemplo.com.br} é fictício.
+
+Aplicar e listar os recursos usa o \texttt{kubectl}:
+
+\begin{lstlisting}[language=bash, caption={Listing 9.6 – Aplicação das políticas do Cilium (comando de cluster, não executado).}, label=lst:cilium-apply]
+# TODO: validar em um cluster Kubernetes
+kubectl apply -f api-somente-get.yaml
+kubectl get cnp -n loja
+\end{lstlisting}
+
+% ----------------------------------------------------------------
 \section{Observabilidade com Hubble}
+% ----------------------------------------------------------------
 
+O Hubble é a camada de observabilidade do Cilium. Ele aproveita o fato de que os
+programas eBPF do Cilium já veem cada pacote para emitir \textbf{eventos de fluxo},
+que incluem origem e destino por identidade (nome do \textit{pod}, \textit{namespace}),
+protocolo, porta e, o ponto mais valioso, o \textbf{veredito} da política
+(\texttt{FORWARDED}, \texttt{DROPPED}) \cite{hubbledocs}. Isso responde à pergunta
+que o capítulo \ref{cap:k8s} deixou aberta: qual política derrubou a conexão?
+
+Cada agente mantém um histórico limitado dos fluxos do seu nó. O componente
+\textit{Hubble Relay} agrega os agentes e oferece uma única API para o cluster inteiro;
+a CLI \texttt{hubble} e a interface web (Hubble UI) consomem essa API
+\cite{hubbledocs}. O bloco a seguir ativa e usa o Hubble. É um \textbf{comando de
+cluster, não executado}:
+
+\begin{lstlisting}[language=bash, caption={Listing 9.7 – Ativação e consulta de fluxos com o Hubble (comando de cluster, não executado).}, label=lst:hubble-observe]
+# TODO: validar em um cluster Kubernetes
+cilium hubble enable --ui
+cilium hubble port-forward &
+
+hubble status
+hubble observe --namespace loja
+hubble observe --namespace loja --verdict DROPPED --follow
+hubble observe --to-pod loja/api --protocol http
+cilium hubble ui
+\end{lstlisting}
+
+O segundo comando de \texttt{hubble observe} é o mais útil para depuração de
+política: ele acompanha em tempo real apenas os fluxos descartados. Cada linha traz a
+origem, o destino, o protocolo e o veredito, de modo que o \textit{pod} bloqueado e a
+política responsável ficam evidentes. A saída é por \textit{pod} (nomes de recurso do
+Kubernetes) e não por endereço IP, o que a torna legível em um ambiente onde os
+endereços mudam o tempo todo. Neste manual, não há saída real a mostrar.
+
+O Hubble também gera métricas no formato Prometheus (contagem de fluxos por
+veredito, consultas DNS e requisições HTTP, entre outras), que podem ser coletadas e
+exibidas em Grafana como no capítulo \ref{cap:obs-rede} \cite{hubbledocs,
+prometheusdocs, grafanadocs}. Assim, a cadeia de observabilidade do Manual~1 e do
+capítulo \ref{cap:obs-rede} se estende a nível de cluster.
+
+% ----------------------------------------------------------------
 \section{Segurança de rede com Cilium}
+% ----------------------------------------------------------------
+
+Além das políticas de rede, o Cilium oferece recursos de segurança que se apoiam
+no eBPF \cite{ciliumdocs}:
+
+\begin{itemize}
+  \item \textbf{Criptografia transparente} entre nós, com WireGuard ou IPsec, ativada
+        por parâmetros de instalação, sem alterar as aplicações;
+  \item \textbf{Políticas por identidade em vez de endereço}, o que reduz a superfície
+        de erro de listas de IP desatualizadas;
+  \item \textbf{Visibilidade de descartes} por meio do Hubble, que dá ao administrador
+        uma trilha de auditoria de tráfego negado;
+  \item \textbf{Integração com o Tetragon} \cite{tetragon}, projeto da mesma
+        família, que acrescenta observabilidade e imposição em tempo de execução
+        sobre processos e chamadas de sistema.
+\end{itemize}
+
+A ativação da criptografia com WireGuard é feita na instalação (comando de cluster,
+\textbf{não executado}; os nomes dos parâmetros devem ser conferidos na documentação
+da versão):
+
+\begin{lstlisting}[language=bash, caption={Listing 9.8 – Ativação da criptografia transparente com WireGuard (comando de cluster, não executado).}, label=lst:cilium-wg]
+# TODO: validar em um cluster Kubernetes
+cilium install --set encryption.enabled=true --set encryption.type=wireguard
+cilium status
+\end{lstlisting}
+
+\textbf{Limites e cuidados.} A segurança do Cilium vale tanto quanto a configuração:
+uma política \textit{default-allow} (nenhuma política selecionando o \textit{pod})
+continua permissiva, e o Hubble só vê o que passa pelos programas do Cilium. O
+agente roda com privilégios elevados em cada nó e carrega código no kernel; seu
+comprometimento é grave, e o acesso ao cluster deve ser controlado de acordo. Por fim, a
+mesma regra de honestidade vale para o restante deste manual: o que foi descrito aqui
+representa a documentação oficial \cite{ciliumdocs}, não uma execução. Para validá-lo, o
+caminho mais curto é um cluster local de teste (como \textit{kind} ou \textit{minikube}) e o
+roteiro da documentação do projeto.
