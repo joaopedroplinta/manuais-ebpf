@@ -187,7 +187,6 @@ versões \texttt{-libbpf} das ferramentas terem funcionado onde as de Python
 falharam. Elas são empacotadas em Debian e Ubuntu como \texttt{libbpf-tools}:
 
 \begin{lstlisting}[language=bash, caption={Listing 10.6 – Ferramentas de rede da libbpf-tools.}, label=lst:ferr-libbpf-tools]
-# TODO: validar com sudo
 sudo tcpconnect-libbpf
 sudo tcplife-libbpf
 \end{lstlisting}
@@ -272,7 +271,6 @@ clang -target bpf -O2 -g -I/usr/include/x86_64-linux-gnu \
 bpftool gen skeleton fw_xdp.bpf.o > fw_xdp.skel.h
 gcc -O2 -Wall -I. fw_loader.c -o fw_loader -lbpf -lelf -lz
 
-# TODO: validar com sudo
 sudo ./fw_loader eth0 10.0.0.2    # Ctrl-C desanexa o programa
 \end{lstlisting}
 

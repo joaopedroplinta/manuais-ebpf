@@ -1,0 +1,141 @@
+== 0. compilar os programas (clang -target bpf)
+PASS  compila fw_xdp
+PASS  compila pkt_trace
+PASS  compila syn_guard
+PASS  compila tc_egress_fw
+PASS  skeleton fw_xdp
+PASS  compila fw_loader
+== laboratorio: netns pod1 + veth (veth-host <-> veth-pod)
+PASS  ping pod -> host (sem eBPF)
+== 1. captura e analise de pacotes (pkt_trace + tcpdump)
+xdp:
+veth-host(88) generic id 1505
+
+tc:
+
+flow_dissector:
+
+netfilter:
+
+-- tracelog (filtrado)
+           <...>-2433305 [003] ..s21 290516.641054: bpf_trace_printk: proto=1 src=10.200.0.2 len=98
+            ping-2433305 [003] ..s21 290517.663240: bpf_trace_printk: proto=1 src=10.200.0.2 len=98
+            ping-2433305 [003] ..s21 290518.687122: bpf_trace_printk: proto=1 src=10.200.0.2 len=98
+-- tcpdump
+tcpdump: verbose output suppressed, use -v[v]... for full protocol decode
+listening on veth-host, link-type EN10MB (Ethernet), snapshot length 262144 bytes
+02:07:00.946145 IP 10.200.0.2 > 10.200.0.1: ICMP echo request, id 8473, seq 1, length 64
+02:07:00.946189 IP 10.200.0.1 > 10.200.0.2: ICMP echo reply, id 8473, seq 1, length 64
+02:07:01.968341 IP 10.200.0.2 > 10.200.0.1: ICMP echo request, id 8473, seq 2, length 64
+3 packets captured
+PASS  bpf_printk registrou ICMP (proto=1)
+PASS  tcpdump viu o mesmo ICMP
+== 2. monitoramento de conexoes
+-- ss (conexoes de escuta)
+State  Recv-Q Send-Q Local Address:Port Peer Address:Port
+LISTEN 0      5          127.0.0.1:8099      0.0.0.0:*   
+-- tcpconnect-libbpf
+PID    COMM             IP SADDR            DADDR            DPORT
+2433469 curl             4  127.0.0.1        127.0.0.1        8099 
+2433471 curl             4  127.0.0.1        127.0.0.1        8099 
+2433473 curl             4  127.0.0.1        127.0.0.1        8099 
+PASS  tcpconnect-libbpf viu conexao para 8099
+-- tcplife-libbpf
+PID     COMM             LADDR           LPORT RADDR           RPORT TX_KB  RX_KB  MS
+2433469 curl             127.0.0.1       8099  127.0.0.1       59648 0.95   0.08   0.92
+2433469 curl             127.0.0.1       59648 127.0.0.1       8099  0.08   0.95   0.95
+2433471 curl             127.0.0.1       8099  127.0.0.1       59652 0.95   0.08   0.57
+2433471 curl             127.0.0.1       59652 127.0.0.1       8099  0.08   0.95   0.59
+PASS  tcplife-libbpf viu conexao 8099
+-- bpftrace inet_sock_set_state
+Attached 1 probe
+curl -> dport 8099
+curl -> dport 59648
+curl -> dport 8099
+curl -> dport 59652
+PASS  bpftrace viu conexao para 8099
+== 3. filtragem de trafego (fw_xdp na veth-host)
+xdp:
+veth-host(88) generic id 1543
+
+tc:
+
+flow_dissector:
+
+netfilter:
+
+PASS  ping passa com firewall vazio
+[{
+        "key": 33605642,
+        "value": 1
+    }
+]
+PASS  ping bloqueado pela blocklist
+-- contadores (aceitos=0, descartados=1)
+[{
+        "key": 0,
+        "values": [{
+                "cpu": 0,
+                "value": 0
+            },{
+                "cpu": 1,
+                "value": 1
+            },{
+                "cpu": 2,
+                "value": 0
+            },{
+                "cpu": 3,
+                "value": 1
+            },{
+                "cpu": 4,
+                "value": 0
+            },{
+                "cpu": 5,
+                "value": 0
+            },{
+                "cpu": 6,
+                "value": 0
+            },{
+                "cpu": 7,
+                "value": 0
+            }
+        ]
+    },{
+        "key": 1,
+        "values": [{
+                "cpu": 0,
+                "value": 0
+            },{
+                "cpu": 1,
+                "value": 0
+            },{
+                "cpu": 2,
+                "value": 0
+            },{
+                "cpu": 3,
+                "value": 0
+            },{
+                "cpu": 4,
+                "value": 0
+            },{
+                "cpu": 5,
+                "value": 0
+            },{
+                "cpu": 6,
+                "value": 0
+            },{
+                "cpu": 7,
+                "value": 2
+            }
+        ]
+    }
+]
+PASS  ping volta apos remover regra
+PASS  ping apos desanexar
+== 3b. carregador libbpf (fw_loader) por 3 s
+aceitos=0 descartados=0 
+aceitos=0 descartados=0 
+aceitos=0 descartados=0 
+PASS  fw_loader imprimiu contadores
+
+RESUMO: 17 PASS, 0 FAIL

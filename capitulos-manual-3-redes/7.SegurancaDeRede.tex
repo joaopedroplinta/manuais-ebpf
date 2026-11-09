@@ -13,10 +13,13 @@ IPv6 e política de falha mais cuidadosos do que os apresentados aqui.
 Os programas C deste capítulo foram compilados com
 \texttt{clang -target bpf -O2 -g -c}, o que confirma sintaxe e uso correto dos
 cabeçalhos. A aceitação pelo verificador e o comportamento em tempo de execução
-dependem de carregar o programa no kernel, o que exige \textit{root}; os blocos que
-carregam programas trazem a marca \texttt{\% TODO: validar com sudo} no código-fonte
-do capítulo, até que sejam executados pelo script \texttt{testes/09-redes-exemplos.sh}
-(capítulo \ref{cap:exemplos-redes}).
+dependem de carregar o programa no kernel, o que exige \textit{root}. O filtro XDP
+\texttt{fw\_xdp} foi carregado e testado pelo script
+\texttt{testes/09-redes-exemplos.sh} (capítulo \ref{cap:exemplos-redes}): o \texttt{ping}
+passou com a lista de bloqueio vazia, foi bloqueado ao inserir a origem e voltou ao
+remover a regra. O firewall de saída em TC e o limitador de SYN foram apenas
+compilados, e seus blocos trazem a marca \texttt{TODO: validar com sudo} no
+código-fonte do capítulo.
 
 % ----------------------------------------------------------------
 \section{Filtragem de pacotes}
@@ -167,7 +170,6 @@ interface. O modo \texttt{xdpgeneric} funciona em qualquer interface, inclusive
 \texttt{veth} e máquinas virtuais (seção \ref{sec:xdp-modos}):
 
 \begin{lstlisting}[language=bash, caption={Listing 7.3 – Carga e anexação do firewall XDP (requer root).}, label=lst:seg-attach]
-# TODO: validar com sudo
 sudo mkdir -p /sys/fs/bpf/fw
 sudo bpftool prog loadall fw_xdp.bpf.o /sys/fs/bpf/fw \
      pinmaps /sys/fs/bpf/fw/maps
@@ -186,7 +188,6 @@ a \texttt{0a 00 00 02}. O valor é um inteiro de 32 bits qualquer (apenas a pres
 chave importa), escrito em \textit{little-endian} no x86:
 
 \begin{lstlisting}[language=bash, caption={Listing 7.4 – Edição das regras do firewall por meio dos mapas.}, label=lst:seg-regras]
-# TODO: validar com sudo
 # bloquear a origem 10.0.0.2
 sudo bpftool map update pinned /sys/fs/bpf/fw/maps/blocklist \
      key hex 0a 00 00 02 value hex 01 00 00 00
@@ -216,7 +217,6 @@ fixados. Sem a remoção do \textit{pin}, o programa e os mapas permanecem na me
 do kernel mesmo depois que nenhum processo os referencia.
 
 \begin{lstlisting}[language=bash, caption={Listing 7.5 – Desanexação e limpeza.}, label=lst:seg-detach]
-# TODO: validar com sudo
 sudo bpftool net detach xdpgeneric dev eth0
 sudo rm -r /sys/fs/bpf/fw
 \end{lstlisting}

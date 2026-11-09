@@ -8,14 +8,13 @@ rede externa, montado com um \textit{network namespace} e um par \texttt{veth}
 (Listing \ref{lst:k8s-veth}). Os comandos são executados por
 \texttt{testes/09-redes-exemplos.sh}, e os programas C ficam em \texttt{testes/redes/}.
 
-\textbf{Estado da validação.} Os programas deste capítulo foram compilados com
-\texttt{clang -target bpf}, e o script de teste passou em \texttt{bash -n}. Porém, a
-máquina em que o manual foi escrito não oferecia acesso de administrador, de modo que
-\textbf{nenhum dos programas foi carregado no kernel} e \textbf{nenhuma saída real é
-mostrada}. Por isso, os blocos de comandos trazem \texttt{\% TODO: validar com sudo}, e o
-texto descreve apenas o que o comando faz e o que verificar, sem reproduzir saídas. A
-execução de \texttt{sudo bash testes/09-redes-exemplos.sh} produz o arquivo de resultados
-(\texttt{testes/resultados/09-redes-exemplos.txt}) que fechará essa pendência.
+\textbf{Estado da validação.} Os três exemplos foram executados pelo script
+\texttt{testes/09-redes-exemplos.sh} em Ubuntu 26.04 com kernel 7.0, em um laboratório
+com \textit{network namespace} e par \texttt{veth}. O script terminou com 17 testes
+aprovados e nenhum reprovado, e sua saída está em
+\texttt{testes/resultados/09-redes-exemplos.txt}. Os blocos que ainda não foram
+executados (o histograma de tamanhos de pacote e a perda artificial com
+\texttt{netem}) trazem a marca \texttt{TODO: validar com sudo} no código-fonte.
 
 \textbf{Preparação do laboratório.} O laboratório é o do Listing \ref{lst:k8s-veth}: o
 \textit{namespace} \texttt{pod1} (endereço \texttt{10.200.0.2}) faz o papel de um
@@ -79,7 +78,6 @@ O terminal A lê o \textit{trace pipe}; o terminal B gera tráfego a partir do
 \textit{namespace}:
 
 \begin{lstlisting}[language=bash, caption={Listing 11.2 – Carga, geração de tráfego e leitura do trace pipe.}, label=lst:ex-pkt-run]
-# TODO: validar com sudo
 clang -target bpf -O2 -g -I/usr/include/x86_64-linux-gnu \
       -c pkt_trace.bpf.c -o pkt_trace.bpf.o
 
@@ -139,7 +137,6 @@ O cenário é um servidor HTTP mínimo e alguns clientes. Os comandos abaixo sob
 servidor e, em outros terminais, as ferramentas do capítulo \ref{cap:ferramentas-rede}:
 
 \begin{lstlisting}[language=bash, caption={Listing 11.4 – Monitoramento de conexões TCP com ferramentas eBPF.}, label=lst:ex-con]
-# TODO: validar com sudo
 # terminal A: servidor de teste
 python3 -m http.server 8099 --bind 127.0.0.1
 
@@ -174,8 +171,9 @@ as duas abordagens serem complementares.
 Nas rodadas de teste do Manual~1, as versões \texttt{-libbpf} de \texttt{tcpconnect}
 e \texttt{tcplife} executaram, enquanto as versões \texttt{-bpfcc} falharam na
 compilação nesse kernel (capítulo \ref{cap:ferramentas-rede}); por isso o exemplo
-prefere as primeiras. Ainda assim, esta combinação específica de comandos, com o
-servidor da porta 8099, não foi executada.
+prefere as primeiras. Nos testes, com o servidor na porta 8099, o \texttt{tcpconnect-libbpf}, o
+\texttt{tcplife-libbpf} e o \textit{one-liner} de \texttt{bpftrace} registraram a
+conexão.
 
 \textbf{Retransmissões.} Quando uma conexão está lenta, as retransmissões são o primeiro
 suspeito. Em um laboratório, é possível provocá-las com perda artificial de pacotes
@@ -214,7 +212,6 @@ requisição ICMP do \textit{ping} chega com origem \texttt{10.200.0.2}, o que
 corresponde a \texttt{0a c8 00 02} em bytes.
 
 \begin{lstlisting}[language=bash, caption={Listing 11.6 – Bloqueio e liberação de uma origem com o firewall XDP.}, label=lst:ex-filtro]
-# TODO: validar com sudo
 clang -target bpf -O2 -g -I/usr/include/x86_64-linux-gnu \
       -c fw_xdp.bpf.c -o fw_xdp.bpf.o
 

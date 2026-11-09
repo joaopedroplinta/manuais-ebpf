@@ -95,7 +95,7 @@ check "ping passa com firewall vazio" ip netns exec $NS ping -c 2 -W 2 $HOSTIP
 bpftool map update pinned /sys/fs/bpf/redes/fw/maps/blocklist key hex 0a c8 00 02 value hex 01 00 00 00
 bpftool map dump pinned /sys/fs/bpf/redes/fw/maps/blocklist
 if ip netns exec $NS ping -c 2 -W 2 $HOSTIP >/dev/null 2>&1; then nok "ping bloqueado pela blocklist"; else ok "ping bloqueado pela blocklist"; fi
-echo "-- contadores (aceitos=0, descartados=1)"; bpftool map dump pinned /sys/fs/bpf/redes/fw/maps/stats
+echo "-- contadores (indice 0 = aceitos, 1 = descartados, somados por CPU)"; bpftool map dump pinned /sys/fs/bpf/redes/fw/maps/stats
 bpftool map delete pinned /sys/fs/bpf/redes/fw/maps/blocklist key hex 0a c8 00 02
 check "ping volta apos remover regra" ip netns exec $NS ping -c 2 -W 2 $HOSTIP
 bpftool net detach xdpgeneric dev $HOSTIF
