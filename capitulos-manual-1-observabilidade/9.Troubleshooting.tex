@@ -25,6 +25,10 @@ Para medir o custo de uma sonda, rode a carga de trabalho com e sem ela e compar
 
 \textbf{Avisos do bpftrace.} Ao usar USDT, o \texttt{bpftrace} 0.25.0 imprime avisos de compilação vindos do \texttt{vmlinux.h} (\texttt{declaration does not declare anything}). São inofensivos e a opção \texttt{--no-warnings} não os suprime. Já um programa USDT de várias linhas, salvo em arquivo, fez o \texttt{bpftrace} abortar com \texttt{Assertion failed}. Escreva \textit{scripts} USDT em uma única linha com \texttt{-e}.
 
+\textbf{Filtros por nome e por PID em programas com \textit{threads}.} O campo \texttt{COMM} traz o nome da \textit{thread}, que pode ser diferente do nome do programa: o servidor do Python apareceu como \texttt{Thread-3 (proce}, e \texttt{opensnoop-libbpf -n python3} não mostrou nada. O \texttt{syscount-libbpf -p PID} contou só a \textit{thread} principal. Filtre por PID no \texttt{opensnoop} e, para o \texttt{syscount}, use o \texttt{bpftrace} com \texttt{/pid == N/}.
+
+\textbf{Porta já em uso.} Se o serviço de teste encerra sem erro visível, a porta provavelmente está ocupada, como a 8080 pelo \texttt{docker-proxy} no ambiente de teste. Confira com \texttt{ss -ltnp} e redirecione a saída do servidor para um arquivo para ver a mensagem de erro.
+
 \textbf{Sondas que não existem.} Uma sonda pode estar ausente porque o pacote foi compilado sem ela. O erro típico é \texttt{No matches for usdt}. Liste as sondas com \texttt{bpftrace -l} antes de escrever o programa.
 
 \textbf{Funções internas mudam.} Um \textit{kprobe} depende do nome e dos argumentos de uma função interna do kernel, que não são uma interface estável. Se um programa deixar de funcionar após uma atualização, verifique primeiro se a função ainda existe com \texttt{bpftrace -l 'kprobe:nome*'}.

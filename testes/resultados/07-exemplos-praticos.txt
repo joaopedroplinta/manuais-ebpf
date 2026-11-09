@@ -1,0 +1,85 @@
+== A. execsnoop: processos curtos
+PCOMM            PID    PPID   RET ARGS
+sleep            2392088 2392059   0 /usr/bin/sleep 1 
+sleep            2392255 2392059   0 /usr/bin/sleep 1 
+sleep            2392288 2392059   0 /usr/bin/sleep 1 
+sleep            2392381 2392059   0 /usr/bin/sleep 1 
+sleep            2392535 2392059   0 /usr/bin/sleep 1 
+sleep            2392589 2392059   0 /usr/bin/sleep 0.2 
+== A2. execve com o nome do arquivo (carga: 3x date)
+Attached 1 probe
+
+
+== A3. contagem de execve por processo (carga: 3x date)
+Attached 1 probe
+
+
+@[bash]: 1
+@[code]: 11
+== B. servidor http (porta 8099)
+quem usa a 8080:
+LISTEN 0      4096                                  0.0.0.0:8080       0.0.0.0:*    users:(("docker-proxy",pid=46577,fd=8))                                                                                                                                           
+LISTEN 0      4096                                     [::]:8080          [::]:*    users:(("docker-proxy",pid=46584,fd=8))                                                                                                                                           
+SRV=2392731 comm=python3 tgid=2392731
+-- B1 opensnoop -p
+PID    COMM              FD ERR PATH
+2392731 Thread-3 (proce    5   0 /tmp/
+-- B2 opensnoop sem -p, filtrado por comm
+PID    COMM              FD ERR PATH
+-- B3 opensnoop -n python3
+PID    COMM              FD ERR PATH
+-- B4 syscount -p
+Tracing syscalls, printing top 10... Ctrl+C to quit.
+[01:36:43]
+SYSCALL                   COUNT
+poll                          4
+
+[01:36:45]
+SYSCALL                   COUNT
+poll                          4
+
+[01:36:47]
+SYSCALL                   COUNT
+poll                          4
+
+[01:36:49]
+SYSCALL                   COUNT
+poll                          4
+
+[01:36:51]
+SYSCALL                   COUNT
+poll                          4
+-- B5 syscount sem -p
+Tracing syscalls, printing top 10... Ctrl+C to quit.
+[01:37:17]
+SYSCALL                   COUNT
+futex                     11400
+ioctl                      9247
+ppoll                      9025
+write                      8465
+epoll_wait                 8147
+recvmsg                    7207
+read                       6514
+getpid                     3713
+sendto                     2265
+== C. tcplife -L 8099
+PID     COMM             LADDR           LPORT RADDR           RPORT TX_KB  RX_KB  MS
+2395627 curl             127.0.0.1       8099  127.0.0.1       37488 6.94   0.08   1.10
+2395629 curl             127.0.0.1       8099  127.0.0.1       37490 6.94   0.08   0.96
+2395631 curl             127.0.0.1       8099  127.0.0.1       37496 6.94   0.08   0.86
+2395633 curl             127.0.0.1       8099  127.0.0.1       37502 6.94   0.08   0.92
+2395635 curl             127.0.0.1       8099  127.0.0.1       37514 6.94   0.08   1.05
+== D. USDT: modulos importados
+usdt:/usr/bin/python3.14:python:import__find__load__start { printf("%s\n", str(arg0)); }
+Attached 1 probe
+_frozen_importlib_external
+_io
+marshal
+posix
+zipimport
+time
+encodings
+codecs
+_codecs
+encodings.aliases
+== fim
