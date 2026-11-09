@@ -51,8 +51,9 @@ sudo syscount-libbpf -i 5
 
 Sem filtro, a saída cobre o sistema inteiro (no teste, \texttt{futex}, \texttt{ioctl}, \texttt{ppoll} e \texttt{write} lideraram) e serve para ver o perfil geral do host. A opção \texttt{-p PID} existe, mas nos testes ela contou apenas a \textit{thread} principal do servidor, que só aparecia em \texttt{poll}, e deixou de fora as \textit{threads} que atendem as requisições. Para programas com várias \textit{threads}, prefira o \texttt{bpftrace}, que permite filtrar por \texttt{pid}, o identificador do processo inteiro:
 
+% TODO: validar com sudo (variante B6 do testes/07)
 \begin{lstlisting}
-sudo bpftrace -e 'tracepoint:raw_syscalls:sys_enter /pid == '$PID'/ { @[comm] = count(); }'  % TODO: validar com sudo
+sudo bpftrace -e 'tracepoint:raw_syscalls:sys_enter /pid == '$PID'/ { @[comm] = count(); }'
 \end{lstlisting}
 
 \section{Rastreamento de uma aplicação}
