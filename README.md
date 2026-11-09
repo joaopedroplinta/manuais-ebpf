@@ -13,7 +13,7 @@ Manuais do projeto de extensão do minicurso **Introdução ao eBPF**, desenvolv
 | 2 | eBPF para Segurança | `main-manual-2-seguranca.tex` | `capitulos-manual-2-seguranca/` (11) |
 | 3 | eBPF para Redes | `main-manual-3-redes.tex` | `capitulos-manual-3-redes/` (12) |
 
-Cada manual é compilado separadamente e gera seu próprio PDF, com capa, folha de rosto e sumário. Por enquanto os capítulos são esqueletos com os títulos das seções. O texto ainda será escrito.
+Cada manual é compilado separadamente e gera seu próprio PDF, com capa, folha de rosto e sumário. Os três manuais têm todos os capítulos escritos. Os exemplos foram executados e registrados em `testes/` (scripts `01` a `09`, com a saída em `testes/resultados/`); os capítulos de Kubernetes e Cilium do Manual 3 são conceituais, e os trechos ainda sem execução estão marcados com `TODO: validar com sudo` no código-fonte.
 
 ## Estrutura
 
@@ -22,7 +22,8 @@ main-manual-N-<tema>.tex      main de cada manual
 capitulos-manual-N-<tema>/    um arquivo .tex por capítulo (1.Introducao.tex, 2.PreRequisitos.tex, ...)
 referencias.bib               referências, compartilhadas pelos três manuais
 ifpr-pinhais.cls              classe do IFPR Pinhais (baseada em abntex2)
-imagens/                      logos usados na capa
+imagens/                      logos da capa e figuras
+testes/                       scripts que executam os exemplos e os resultados de cada execução
 ```
 
 ## Como compilar
