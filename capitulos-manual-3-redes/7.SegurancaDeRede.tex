@@ -1,7 +1,446 @@
 \chapter{Segurança de Rede}
+\label{cap:seguranca-rede}
 
+Os capítulos \ref{cap:xdp} e \ref{cap:tc} apresentaram XDP e TC como pontos de
+intervenção no caminho dos pacotes, e o capítulo \ref{cap:obs-rede} mostrou como
+observar o tráfego sem alterá-lo. Este capítulo usa os mesmos ganchos para o lado
+defensivo: descartar tráfego indesejado, montar um \textit{firewall} cujas regras
+vivem em mapas BPF e detectar comportamento suspeito, como uma inundação de pacotes
+SYN \cite{linuxkernel2024, gregg2019}. Todos os exemplos são didáticos e voltados a
+ambiente de laboratório; um sistema em produção exige testes de carga, tratamento de
+IPv6 e política de falha mais cuidadosos do que os apresentados aqui.
+
+Os programas C deste capítulo foram compilados com
+\texttt{clang -target bpf -O2 -g -c}, o que confirma sintaxe e uso correto dos
+cabeçalhos. A aceitação pelo verificador e o comportamento em tempo de execução
+dependem de carregar o programa no kernel, o que exige \textit{root}; os blocos que
+carregam programas trazem a marca \texttt{\% TODO: validar com sudo} no código-fonte
+do capítulo, até que sejam executados pelo script \texttt{testes/09-redes-exemplos.sh}
+(capítulo \ref{cap:exemplos-redes}).
+
+% ----------------------------------------------------------------
 \section{Filtragem de pacotes}
+% ----------------------------------------------------------------
 
+Filtrar pacotes é decidir, para cada um, entre deixá-lo seguir ou descartá-lo com base
+em campos dos cabeçalhos. Em eBPF, a decisão acontece em um dos dois ganchos já
+estudados \cite{linuxkernel2024}:
+
+\begin{itemize}
+  \item \textbf{XDP} (\texttt{XDP\_DROP}): o descarte ocorre antes da alocação do
+        \texttt{sk\_buff}, com o menor custo possível; é o ponto ideal para
+        tráfego de entrada que nunca deve alcançar a pilha, como origens
+        conhecidamente maliciosas (capítulo \ref{cap:xdp});
+  \item \textbf{TC} (\texttt{TC\_ACT\_SHOT}): o descarte ocorre com o
+        \texttt{sk\_buff} já criado, mas com acesso a metadados como o
+        \textit{cgroup} do originador; é o ponto natural para o tráfego de
+        \textbf{saída} e para políticas por contêiner (capítulo \ref{cap:tc}).
+\end{itemize}
+
+A diferença para o \textit{iptables} e o \textit{nftables} está no modelo de
+configuração. Regras de \textit{netfilter} são percorridas em cadeias, em sequência;
+a quantidade de regras influencia o custo por pacote. Em eBPF, a regra é código, e
+listas grandes de endereços ou portas ficam em mapas \texttt{HASH}, com custo de
+consulta aproximadamente constante \cite{gregg2019}. Atualizar a lista é uma escrita
+no mapa, sem recarregar o programa.
+
+O critério de decisão mais simples é a \textbf{lista de bloqueio por endereço de
+origem}. O programa a seguir consulta o endereço IPv4 de origem do pacote em um mapa
+e também verifica se a porta de destino TCP ou UDP está proibida. Os dois mapas são
+preenchidos pelo espaço de usuário; um terceiro mapa, \texttt{PERCPU\_ARRAY}, conta
+pacotes aceitos e descartados.
+
+\begin{lstlisting}[caption={Listing 7.1 – Filtro XDP por IP de origem e porta de destino (fw\_xdp.bpf.c).}, label=lst:seg-fw-xdp]
+#include <linux/bpf.h>
+#include <linux/if_ether.h>
+#include <linux/ip.h>
+#include <linux/udp.h>
+#include <linux/in.h>
+#include <bpf/bpf_helpers.h>
+#include <bpf/bpf_endian.h>
+
+struct {
+    __uint(type, BPF_MAP_TYPE_HASH);
+    __uint(max_entries, 1024);
+    __type(key, __u32);            /* IPv4 de origem (ordem de rede) */
+    __type(value, __u32);
+} blocklist SEC(".maps");
+
+struct {
+    __uint(type, BPF_MAP_TYPE_HASH);
+    __uint(max_entries, 64);
+    __type(key, __u16);            /* porta de destino (ordem do host) */
+    __type(value, __u32);
+} blocked_ports SEC(".maps");
+
+struct {
+    __uint(type, BPF_MAP_TYPE_PERCPU_ARRAY);
+    __uint(max_entries, 2);        /* 0 = aceitos, 1 = descartados */
+    __type(key, __u32);
+    __type(value, __u64);
+} stats SEC(".maps");
+
+static __always_inline void conta(__u32 idx)
+{
+    __u64 *v = bpf_map_lookup_elem(&stats, &idx);
+    if (v)
+        *v += 1;
+}
+
+SEC("xdp")
+int xdp_fw(struct xdp_md *ctx)
+{
+    void *data     = (void *)(long)ctx->data;
+    void *data_end = (void *)(long)ctx->data_end;
+
+    struct ethhdr *eth = data;
+    if ((void *)(eth + 1) > data_end)
+        return XDP_PASS;
+    if (eth->h_proto != bpf_htons(ETH_P_IP))
+        return XDP_PASS;
+
+    struct iphdr *ip = (void *)(eth + 1);
+    if ((void *)(ip + 1) > data_end)
+        return XDP_PASS;
+
+    /* 1. origem na lista de bloqueio */
+    __u32 src = ip->saddr;
+    if (bpf_map_lookup_elem(&blocklist, &src))
+        goto drop;
+
+    /* 2. porta de destino bloqueada (TCP ou UDP) */
+    if (ip->protocol == IPPROTO_TCP || ip->protocol == IPPROTO_UDP) {
+        void *l4 = (void *)ip + ip->ihl * 4;
+        struct udphdr *udp = l4;   /* dest fica no mesmo offset em TCP e UDP */
+        if ((void *)(udp + 1) > data_end)
+            goto ok;
+        __u16 dport = bpf_ntohs(udp->dest);
+        if (bpf_map_lookup_elem(&blocked_ports, &dport))
+            goto drop;
+    }
+
+ok:
+    conta(0);
+    return XDP_PASS;
+drop:
+    conta(1);
+    return XDP_DROP;
+}
+
+char LICENSE[] SEC("license") = "GPL";
+\end{lstlisting}
+
+Três detalhes do programa merecem atenção. Primeiro, o endereço de origem é usado
+como chave em \textbf{ordem de rede}, exatamente como está no pacote, sem conversão;
+quem preenche o mapa precisa respeitar essa ordem. Segundo, o tamanho do cabeçalho IP
+é variável (\texttt{ihl * 4}), e o programa o respeita antes de ler a porta. Terceiro,
+em caso de pacote truncado ou protocolo não tratado, a escolha é \texttt{XDP\_PASS}:
+o filtro \textit{falha aberto}. Para um filtro de segurança que deve falhar fechado,
+o retorno nesses ramos seria \texttt{XDP\_DROP}, ao custo de derrubar tráfego
+legítimo que o programa não sabe interpretar --- uma decisão de política, não técnica.
+
+Compilar o objeto não exige privilégio:
+
+\begin{lstlisting}[language=bash, caption={Listing 7.2 – Compilação do programa XDP.}, label=lst:seg-compila]
+clang -target bpf -O2 -g -Wall -I/usr/include/x86_64-linux-gnu \
+      -c fw_xdp.bpf.c -o fw_xdp.bpf.o
+\end{lstlisting}
+
+O diretório \texttt{-I/usr/include/x86\_64-linux-gnu} é necessário em distribuições
+Debian e Ubuntu para que \texttt{<asm/types.h>} seja encontrado ao compilar com
+\texttt{-target bpf}; em outras arquiteturas, o nome do diretório muda.
+
+% ----------------------------------------------------------------
 \section{Firewall baseado em eBPF}
+% ----------------------------------------------------------------
 
+Um \textit{firewall} é a combinação de um programa que aplica regras com um mecanismo
+para administrá-las. No caso do Listing \ref{lst:seg-fw-xdp}, as regras são as
+entradas dos mapas \texttt{blocklist} e \texttt{blocked\_ports}, e o administrador é a
+própria ferramenta \texttt{bpftool} \cite{linuxkernel2024}.
+
+\subsection*{Carga e anexação}
+
+O \texttt{bpftool prog loadall} carrega o objeto e fixa (\textit{pin}) programas e
+mapas no sistema de arquivos BPF; o \texttt{bpftool net attach} liga o programa à
+interface. O modo \texttt{xdpgeneric} funciona em qualquer interface, inclusive
+\texttt{veth} e máquinas virtuais (seção \ref{sec:xdp-modos}):
+
+\begin{lstlisting}[language=bash, caption={Listing 7.3 – Carga e anexação do firewall XDP (requer root).}, label=lst:seg-attach]
+# TODO: validar com sudo
+sudo mkdir -p /sys/fs/bpf/fw
+sudo bpftool prog loadall fw_xdp.bpf.o /sys/fs/bpf/fw \
+     pinmaps /sys/fs/bpf/fw/maps
+sudo bpftool net attach xdpgeneric pinned /sys/fs/bpf/fw/xdp_fw dev eth0
+bpftool net show dev eth0
+\end{lstlisting}
+
+A saída de \texttt{bpftool net show} deve listar o programa na seção \texttt{xdp};
+o formato exato varia com a versão da ferramenta, por isso não é reproduzido aqui.
+
+\subsection*{Administração das regras}
+
+Com os mapas fixados, a lista de bloqueio é editada em tempo de execução. A chave é
+o endereço em bytes, na ordem em que aparece no pacote: \texttt{10.0.0.2} corresponde
+a \texttt{0a 00 00 02}. O valor é um inteiro de 32 bits qualquer (apenas a presença da
+chave importa), escrito em \textit{little-endian} no x86:
+
+\begin{lstlisting}[language=bash, caption={Listing 7.4 – Edição das regras do firewall por meio dos mapas.}, label=lst:seg-regras]
+# TODO: validar com sudo
+# bloquear a origem 10.0.0.2
+sudo bpftool map update pinned /sys/fs/bpf/fw/maps/blocklist \
+     key hex 0a 00 00 02 value hex 01 00 00 00
+
+# bloquear a porta de destino 8080 (0x1f90, u16 no formato do host)
+sudo bpftool map update pinned /sys/fs/bpf/fw/maps/blocked_ports \
+     key hex 90 1f value hex 01 00 00 00
+
+# listar e remover regras
+sudo bpftool map dump pinned /sys/fs/bpf/fw/maps/blocklist
+sudo bpftool map delete pinned /sys/fs/bpf/fw/maps/blocklist \
+     key hex 0a 00 00 02
+
+# contadores de aceitos (indice 0) e descartados (indice 1), por CPU
+sudo bpftool map dump pinned /sys/fs/bpf/fw/maps/stats
+\end{lstlisting}
+
+A chave da porta é um \texttt{\_\_u16} no formato do \textit{host}: a porta 8080
+(\texttt{0x1f90}) aparece como \texttt{90 1f} em máquinas \textit{little-endian}.
+Como o mapa \texttt{stats} é \texttt{PERCPU\_ARRAY}, o \texttt{map dump} mostra um
+valor por CPU; o total é a soma deles.
+
+\subsection*{Remoção}
+
+Para desfazer o experimento, desanexe o programa da interface e remova os arquivos
+fixados. Sem a remoção do \textit{pin}, o programa e os mapas permanecem na memória
+do kernel mesmo depois que nenhum processo os referencia.
+
+\begin{lstlisting}[language=bash, caption={Listing 7.5 – Desanexação e limpeza.}, label=lst:seg-detach]
+# TODO: validar com sudo
+sudo bpftool net detach xdpgeneric dev eth0
+sudo rm -r /sys/fs/bpf/fw
+\end{lstlisting}
+
+\subsection*{Firewall de saída com TC}
+
+O XDP só vê tráfego de entrada. Para controlar o que uma máquina ou um contêiner
+\textit{envia}, usa-se o gancho \textit{egress} do TC (capítulo \ref{cap:tc}). O
+programa abaixo descarta segmentos TCP cujo destino seja uma porta proibida, como
+\textit{telnet} (23), e conta quantos pacotes cada regra descartou. Esse é o padrão de
+uma política de saída restritiva, útil contra \textit{malware} que tenta abrir
+conexões para portas incomuns.
+
+\begin{lstlisting}[caption={Listing 7.6 – Firewall de saída em TC (tc\_egress\_fw.bpf.c).}, label=lst:seg-tc-egress]
+#include <linux/bpf.h>
+#include <linux/if_ether.h>
+#include <linux/ip.h>
+#include <linux/tcp.h>
+#include <linux/in.h>
+#include <linux/pkt_cls.h>
+#include <bpf/bpf_helpers.h>
+#include <bpf/bpf_endian.h>
+
+struct {
+    __uint(type, BPF_MAP_TYPE_HASH);
+    __uint(max_entries, 64);
+    __type(key, __u16);            /* porta TCP de destino proibida na saida */
+    __type(value, __u64);          /* pacotes descartados */
+} saida_proibida SEC(".maps");
+
+SEC("tc")
+int tc_egress_fw(struct __sk_buff *skb)
+{
+    void *data     = (void *)(long)skb->data;
+    void *data_end = (void *)(long)skb->data_end;
+
+    struct ethhdr *eth = data;
+    if ((void *)(eth + 1) > data_end || eth->h_proto != bpf_htons(ETH_P_IP))
+        return TC_ACT_OK;
+
+    struct iphdr *ip = (void *)(eth + 1);
+    if ((void *)(ip + 1) > data_end || ip->protocol != IPPROTO_TCP)
+        return TC_ACT_OK;
+
+    struct tcphdr *tcp = (void *)ip + ip->ihl * 4;
+    if ((void *)(tcp + 1) > data_end)
+        return TC_ACT_OK;
+
+    __u16 dport = bpf_ntohs(tcp->dest);
+    __u64 *n = bpf_map_lookup_elem(&saida_proibida, &dport);
+    if (n) {
+        __sync_fetch_and_add(n, 1);
+        return TC_ACT_SHOT;
+    }
+    return TC_ACT_OK;
+}
+
+char LICENSE[] SEC("license") = "GPL";
+\end{lstlisting}
+
+A anexação usa a \textit{qdisc} \texttt{clsact}, como no Listing
+\ref{lst:tc-egress-setup}. A seção \texttt{SEC("tc")} é aceita pelo \texttt{tc} a
+partir de versões recentes do iproute2; em versões antigas, informe a seção
+explicitamente com \texttt{sec tc}.
+
+\begin{lstlisting}[language=bash, caption={Listing 7.7 – Anexação do firewall de saída e inclusão de uma regra.}, label=lst:seg-tc-attach]
+# TODO: validar com sudo
+sudo tc qdisc add dev eth0 clsact
+sudo tc filter add dev eth0 egress bpf da obj tc_egress_fw.bpf.o sec tc
+tc filter show dev eth0 egress
+
+# o mapa nao esta fixado: descubra o id e atualize a regra (porta 23)
+sudo bpftool map show name saida_proibida
+sudo bpftool map update name saida_proibida \
+     key hex 17 00 value hex 00 00 00 00 00 00 00 00
+\end{lstlisting}
+
+\textbf{Limitações do modelo.} Os dois programas tratam apenas IPv4 sem opções de
+encapsulamento. Um firewall completo também precisa de IPv6, de fragmentos IP
+(cuja porta só aparece no primeiro fragmento) e de \textit{rastreamento de conexão},
+para aceitar respostas a conexões iniciadas de dentro e bloquear o restante. O XDP não
+mantém esse estado sozinho; implementá-lo em mapas é possível, mas é justamente o
+trabalho que o \textit{conntrack} do \textit{netfilter} já faz. Por isso, soluções
+maduras como o Cilium (capítulo \ref{cap:cilium}) combinam eBPF com o \textit{conntrack}
+do kernel ou com tabelas próprias de conexões \cite{ciliumdocs}.
+
+% ----------------------------------------------------------------
 \section{Detecção de tráfego suspeito}
+% ----------------------------------------------------------------
+
+Descartar o que já se sabe ser ruim é metade do problema; a outra metade é descobrir
+o que é ruim. Uma assinatura simples e muito comum é a \textbf{inundação de SYN}
+(\textit{SYN flood}): uma origem envia uma rajada de segmentos SYN para esgotar a fila
+de conexões semiabertas do servidor. Detectá-la requer contar SYNs iniciais (flag
+\texttt{SYN} ligada e \texttt{ACK} desligada) por endereço de origem em uma janela de
+tempo \cite{gregg2019}.
+
+O programa abaixo mantém, para cada origem, o início da janela atual e o número de
+SYNs vistos nela. Passado o limite, os SYNs excedentes são descartados e contados.
+O mapa é do tipo \texttt{LRU\_HASH}: quando cheio, o kernel descarta as entradas menos
+recentes, o que impede que um atacante esgote a memória do próprio mecanismo de defesa
+com milhões de endereços forjados --- uma preocupação concreta, já que o XDP não tem
+coleta automática de entradas antigas em um \texttt{HASH} comum
+(capítulo \ref{cap:xdp}).
+
+\begin{lstlisting}[caption={Listing 7.8 – Limitação de SYN por origem em XDP (syn\_guard.bpf.c).}, label=lst:seg-syn]
+#include <linux/bpf.h>
+#include <linux/if_ether.h>
+#include <linux/ip.h>
+#include <linux/tcp.h>
+#include <linux/in.h>
+#include <bpf/bpf_helpers.h>
+#include <bpf/bpf_endian.h>
+
+#define JANELA_NS  1000000000ULL   /* janela de 1 s */
+#define LIMITE_SYN 100             /* SYNs por origem por janela */
+
+struct syn_info {
+    __u64 inicio;   /* inicio da janela atual (ns) */
+    __u64 syns;     /* SYNs vistos na janela */
+};
+
+struct {
+    __uint(type, BPF_MAP_TYPE_LRU_HASH);
+    __uint(max_entries, 65536);
+    __type(key, __u32);            /* IPv4 de origem */
+    __type(value, struct syn_info);
+} syn_por_origem SEC(".maps");
+
+struct {
+    __uint(type, BPF_MAP_TYPE_ARRAY);
+    __uint(max_entries, 1);
+    __type(key, __u32);
+    __type(value, __u64);          /* total de SYNs descartados */
+} descartados SEC(".maps");
+
+SEC("xdp")
+int syn_guard(struct xdp_md *ctx)
+{
+    void *data     = (void *)(long)ctx->data;
+    void *data_end = (void *)(long)ctx->data_end;
+
+    struct ethhdr *eth = data;
+    if ((void *)(eth + 1) > data_end || eth->h_proto != bpf_htons(ETH_P_IP))
+        return XDP_PASS;
+
+    struct iphdr *ip = (void *)(eth + 1);
+    if ((void *)(ip + 1) > data_end || ip->protocol != IPPROTO_TCP)
+        return XDP_PASS;
+
+    struct tcphdr *tcp = (void *)ip + ip->ihl * 4;
+    if ((void *)(tcp + 1) > data_end)
+        return XDP_PASS;
+
+    if (!(tcp->syn && !tcp->ack))      /* so SYN inicial */
+        return XDP_PASS;
+
+    __u32 src = ip->saddr;
+    __u64 now = bpf_ktime_get_ns();
+    struct syn_info *si = bpf_map_lookup_elem(&syn_por_origem, &src);
+
+    if (!si) {
+        struct syn_info novo = { .inicio = now, .syns = 1 };
+        bpf_map_update_elem(&syn_por_origem, &src, &novo, BPF_ANY);
+        return XDP_PASS;
+    }
+    if (now - si->inicio > JANELA_NS) {
+        si->inicio = now;
+        si->syns = 1;
+        return XDP_PASS;
+    }
+    /* contagem nao atomica: aproximada com varias CPUs (suficiente aqui) */
+    si->syns++;
+    if (si->syns > LIMITE_SYN) {
+        __u32 k = 0;
+        __u64 *d = bpf_map_lookup_elem(&descartados, &k);
+        if (d)
+            __sync_fetch_and_add(d, 1);
+        return XDP_DROP;
+    }
+    return XDP_PASS;
+}
+
+char LICENSE[] SEC("license") = "GPL";
+\end{lstlisting}
+
+O incremento \texttt{si->syns++} não é atômico: em um sistema com várias CPUs
+recebendo da mesma origem, algumas contagens podem se perder. Para um limiar de
+detecção isso é aceitável, pois o erro só atrasa levemente o disparo do limite; para
+cobrança ou contabilidade exata, use \texttt{\_\_sync\_fetch\_and\_add} ou um mapa
+\texttt{PERCPU}.
+
+\textbf{Escolha do limite.} O valor de 100 SYNs por segundo por origem é arbitrário e
+serve para demonstração. Em produção, ele deve vir da observação do tráfego normal
+(capítulo \ref{cap:obs-rede}): um serviço atrás de um \textit{proxy} NAT, por exemplo,
+concentra muitos clientes legítimos em um único endereço de origem e seria bloqueado
+por engano. O limite também pode ficar em um mapa de configuração, em vez de uma
+constante compilada, para ajuste sem recarga.
+
+\subsection*{Observando a detecção}
+
+A detecção é útil mesmo sem o descarte. Trocando o \texttt{return XDP\_DROP} por
+\texttt{XDP\_PASS}, o programa vira um detector passivo, e o contador
+\texttt{descartados} passa a indicar quantos SYNs \textit{teriam} sido bloqueados.
+Essa abordagem, de primeiro observar e depois impor, é a recomendada para qualquer
+política nova. Para uma verificação rápida e independente do programa, o
+\textit{bpftrace} conta SYNs recebidos pelo \textit{tracepoint} de estado de socket
+(capítulo \ref{cap:obs-rede}); a contagem por origem aparece ao interromper com
+\texttt{Ctrl-C}:
+
+\begin{lstlisting}[language=bash, caption={Listing 7.9 – Contagem de sockets em SYN\_RECV por porta local com bpftrace.}, label=lst:seg-bt-syn]
+# TODO: validar com sudo
+sudo bpftrace -e 'tracepoint:sock:inet_sock_set_state /args->newstate == 3/ { @syn_recv[args->sport] = count(); }'
+\end{lstlisting}
+
+O estado 3 é \texttt{TCP\_SYN\_RECV}: o \textit{tracepoint} conta os SYNs que chegaram
+a criar um \textit{socket} em \textit{handshake} na porta local. Um pico indica
+pressão sobre o serviço; mas SYNs descartados antes disso (por exemplo, pelo XDP) ou
+que o kernel responde com \textit{syncookies} não aparecem. Para observar o tráfego antes
+da pilha, o ponto correto é o XDP ou o TC, como no Listing \ref{lst:seg-syn}.
+
+Duas outras assinaturas seguem o mesmo molde de "contar por chave em uma janela":
+\textbf{varredura de portas} (muitas portas de destino distintas para o mesmo destino
+em pouco tempo, que exige uma chave composta origem--porta) e \textbf{inundação UDP}
+(taxa de pacotes por origem acima do esperado). Ferramentas de segurança em tempo de
+execução como o Falco \cite{falco} e o Tetragon \cite{tetragon} aplicam o mesmo princípio a chamadas de sistema; no plano da rede, o Cilium e o Hubble
+(capítulo \ref{cap:cilium}) fazem o equivalente com identidade de carga de trabalho.
