@@ -41,7 +41,7 @@ PID=$(pgrep -f "http.server 8099")
 sudo opensnoop-libbpf -p $PID
 \end{lstlisting}
 
-Em um terceiro terminal, faça requisições com \texttt{curl http://localhost:8099/}. O \texttt{opensnoop} mostra o servidor abrindo o diretório pedido (no teste, \texttt{/tmp/}). Repare na coluna \texttt{COMM}: ela traz o nome da \textit{thread} que atendeu a requisição (por exemplo, \texttt{Thread-3 (proce}), e não \texttt{python3}. Por isso filtrar por nome (\texttt{-n python3}) não encontra nada, e o filtro por PID (\texttt{-p}) é o correto.
+Em um terceiro terminal, faça requisições com \texttt{curl http://localhost:8099/}. O \texttt{opensnoop} pode mostrar o servidor abrindo o diretório pedido (em uma das duas rodadas de teste apareceu \texttt{/tmp/}; na outra, a saída ficou vazia, então não conte com ele para ver todas as aberturas). Repare na coluna \texttt{COMM}: ela traz o nome da \textit{thread} que atendeu a requisição (por exemplo, \texttt{Thread-3 (proce}), e não \texttt{python3}. Por isso filtrar por nome (\texttt{-n python3}) não encontra nada, e o filtro por PID (\texttt{-p}) é o correto.
 
 Para a visão agregada, o \texttt{syscount} mostra quais chamadas são mais feitas, sem interromper o processo, o que o \texttt{strace} não consegue evitar:
 
@@ -49,9 +49,8 @@ Para a visão agregada, o \texttt{syscount} mostra quais chamadas são mais feit
 sudo syscount-libbpf -i 5
 \end{lstlisting}
 
-Sem filtro, a saída cobre o sistema inteiro (no teste, \texttt{futex}, \texttt{ioctl}, \texttt{ppoll} e \texttt{write} lideraram) e serve para ver o perfil geral do host. A opção \texttt{-p PID} existe, mas nos testes ela contou apenas a \textit{thread} principal do servidor, que só aparecia em \texttt{poll}, e deixou de fora as \textit{threads} que atendem as requisições. Para programas com várias \textit{threads}, prefira o \texttt{bpftrace}, que permite filtrar por \texttt{pid}, o identificador do processo inteiro:
+Sem filtro, a saída cobre o sistema inteiro (no teste, \texttt{futex}, \texttt{ioctl}, \texttt{ppoll} e \texttt{write} lideraram) e serve para ver o perfil geral do host. A opção \texttt{-p PID} existe, mas nos testes ela contou apenas a \textit{thread} principal do servidor, que só aparecia em \texttt{poll}, e deixou de fora as \textit{threads} que atendem as requisições. Para programas com várias \textit{threads}, prefira o \texttt{bpftrace}, que permite filtrar por \texttt{pid}, o identificador do processo inteiro. No teste, ele contou as chamadas da \textit{thread} principal e de cada \textit{thread} de atendimento (cerca de 200 por \textit{thread} em três requisições):
 
-% TODO: validar com sudo (variante B6 do testes/07)
 \begin{lstlisting}
 sudo bpftrace -e 'tracepoint:raw_syscalls:sys_enter /pid == '$PID'/ { @[comm] = count(); }'
 \end{lstlisting}
