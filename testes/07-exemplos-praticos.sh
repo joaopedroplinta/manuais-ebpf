@@ -43,6 +43,7 @@ echo "-- B1 opensnoop -p"; cena /tmp/ex-b1.out 1 "$CURLS" opensnoop-libbpf -p "$
 echo "-- B2 opensnoop sem -p, filtrado por comm"; cena /tmp/ex-b2.out 1 "$CURLS" opensnoop-libbpf; grep -E "PID|python" /tmp/ex-b2.out | head -15
 echo "-- B3 opensnoop -n python3"; cena /tmp/ex-b3.out 1 "$CURLS" opensnoop-libbpf -n python3; head -15 /tmp/ex-b3.out
 echo "-- B4 syscount -p"; cena /tmp/ex-b4.out 3 "$CURLS" syscount-libbpf -p "$SRV" -i 2; head -20 /tmp/ex-b4.out
+echo "-- B6 bpftrace por pid"; cena /tmp/ex-b6.out 1 "$CURLS" bpftrace -e "tracepoint:raw_syscalls:sys_enter /pid == $SRV/ { @[comm] = count(); }"; filtra /tmp/ex-b6.out 12
 echo "-- B5 syscount sem -p"; cena /tmp/ex-b5.out 3 "$CURLS" syscount-libbpf -i 2; head -12 /tmp/ex-b5.out
 
 echo "== C. tcplife -L $PORTA"
