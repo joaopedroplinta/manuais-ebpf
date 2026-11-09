@@ -1,7 +1,275 @@
 \chapter{Exemplos Práticos}
+\label{cap:exemplos-redes}
 
+Este capítulo reúne três exemplos que combinam o que os capítulos anteriores
+apresentaram: captura e análise de pacotes, monitoramento de conexões e filtragem de
+tráfego. Todos rodam em um \textbf{laboratório local}, sem cluster e sem acesso à
+rede externa, montado com um \textit{network namespace} e um par \texttt{veth}
+(Listing \ref{lst:k8s-veth}). Os comandos são executados por
+\texttt{testes/09-redes-exemplos.sh}, e os programas C ficam em \texttt{testes/redes/}.
+
+\textbf{Estado da validação.} Os três exemplos foram executados pelo script
+\texttt{testes/09-redes-exemplos.sh} em Ubuntu 26.04 com kernel 7.0, em um laboratório
+com \textit{network namespace} e par \texttt{veth}. O script terminou com 17 testes
+aprovados e nenhum reprovado, e sua saída está em
+\texttt{testes/resultados/09-redes-exemplos.txt}. Os blocos que ainda não foram
+executados (o histograma de tamanhos de pacote e a perda artificial com
+\texttt{netem}) trazem a marca \texttt{TODO: validar com sudo} no código-fonte.
+
+\textbf{Preparação do laboratório.} O laboratório é o do Listing \ref{lst:k8s-veth}: o
+\textit{namespace} \texttt{pod1} (endereço \texttt{10.200.0.2}) faz o papel de um
+contêiner, e a interface \texttt{veth-host} (\texttt{10.200.0.1}), no \textit{host}, é
+onde os programas são anexados. Para os exemplos 1 e 3, repita os seis primeiros
+comandos daquele bloco (sem o \texttt{ip netns del}, que desfaz o laboratório); o
+\texttt{testes/09-redes-exemplos.sh} faz isso automaticamente, e remove tudo ao final.
+
+% ----------------------------------------------------------------
 \section{Captura e análise de pacotes}
+% ----------------------------------------------------------------
 
+\textbf{Objetivo.} Observar cada pacote que chega à interface \texttt{veth-host} e
+confrontar o resultado com o \textit{tcpdump}, a referência clássica de captura.
+
+O programa XDP abaixo registra, com \texttt{bpf\_printk}, o protocolo, a origem e o
+tamanho de cada pacote IPv4 e, para TCP, as portas e a flag SYN. Retorna
+\texttt{XDP\_PASS}, e portanto não altera o tráfego. A saída de \texttt{bpf\_printk} vai
+para o \textit{trace pipe} do kernel, o que é suficiente para um exemplo didático;
+para volumes reais, a alternativa é o \texttt{ringbuf} do Listing \ref{lst:tc-ingress-prog}.
+
+\begin{lstlisting}[caption={Listing 11.1 – Programa XDP que registra pacotes com bpf\_printk (pkt\_trace.bpf.c).}, label=lst:ex-pkt-trace]
+#include <linux/bpf.h>
+#include <linux/if_ether.h>
+#include <linux/ip.h>
+#include <linux/tcp.h>
+#include <linux/in.h>
+#include <bpf/bpf_helpers.h>
+#include <bpf/bpf_endian.h>
+
+SEC("xdp")
+int pkt_trace(struct xdp_md *ctx)
+{
+    void *data     = (void *)(long)ctx->data;
+    void *data_end = (void *)(long)ctx->data_end;
+
+    struct ethhdr *eth = data;
+    if ((void *)(eth + 1) > data_end || eth->h_proto != bpf_htons(ETH_P_IP))
+        return XDP_PASS;
+
+    struct iphdr *ip = (void *)(eth + 1);
+    if ((void *)(ip + 1) > data_end)
+        return XDP_PASS;
+
+    bpf_printk("proto=%d src=%pI4 len=%d", ip->protocol, &ip->saddr,
+               (int)(data_end - data));
+    if (ip->protocol == IPPROTO_TCP) {
+        struct tcphdr *tcp = (void *)ip + ip->ihl * 4;
+        if ((void *)(tcp + 1) <= data_end)
+            bpf_printk("tcp %d -> %d syn=%d", bpf_ntohs(tcp->source),
+                       bpf_ntohs(tcp->dest), tcp->syn);
+    }
+    return XDP_PASS;
+}
+
+char LICENSE[] SEC("license") = "GPL";
+\end{lstlisting}
+
+A execução tem quatro passos: compilar, carregar e anexar, gerar tráfego e ler.
+O terminal A lê o \textit{trace pipe}; o terminal B gera tráfego a partir do
+\textit{namespace}:
+
+\begin{lstlisting}[language=bash, caption={Listing 11.2 – Carga, geração de tráfego e leitura do trace pipe.}, label=lst:ex-pkt-run]
+clang -target bpf -O2 -g -I/usr/include/x86_64-linux-gnu \
+      -c pkt_trace.bpf.c -o pkt_trace.bpf.o
+
+sudo mkdir -p /sys/fs/bpf/redes
+sudo bpftool prog loadall pkt_trace.bpf.o /sys/fs/bpf/redes/pt
+sudo bpftool net attach xdpgeneric pinned /sys/fs/bpf/redes/pt/pkt_trace \
+     dev veth-host
+
+# terminal A: ler o que o programa registra
+sudo bpftool prog tracelog
+
+# terminal B: gerar trafego ICMP e TCP a partir do "pod"
+sudo ip netns exec pod1 ping -c 3 10.200.0.1
+sudo ip netns exec pod1 curl -m 2 http://10.200.0.1:8099/   # sem servidor: so o SYN
+
+# terminal C: o mesmo trafego visto pelo tcpdump
+sudo tcpdump -n -i veth-host icmp or tcp port 8099
+
+# limpeza
+sudo bpftool net detach xdpgeneric dev veth-host
+sudo rm -r /sys/fs/bpf/redes
+\end{lstlisting}
+
+\textbf{O que verificar.} Cada pacote ICMP do \texttt{ping} deve gerar uma linha com
+\texttt{proto=1} no \textit{tracelog} (o protocolo 1 é o ICMP), e o \texttt{curl} sem
+servidor deve gerar linhas com \texttt{syn=1} para a porta 8099. O \textit{tcpdump}
+deve mostrar os mesmos pacotes, e o número de pacotes ICMP nas duas saídas deve
+coincidir (o \textit{ping} gera uma requisição ICMP por segundo, três no total).
+Divergências possíveis e seu motivo: o XDP vê apenas tráfego de \textbf{entrada} na
+interface (aqui, as requisições vindas do \textit{pod}), enquanto o \textit{tcpdump}
+captura nos dois sentidos, portanto as respostas do \textit{host} ao \textit{ping} só
+aparecem no \textit{tcpdump}.
+
+\textbf{Análise complementar com bpftrace.} Para a distribuição dos tamanhos dos
+pacotes, sem escrever C, use o \textit{tracepoint} genérico (Listing
+\ref{lst:ferr-bpftrace}). Aqui, o interesse é o formato do resultado, um histograma em
+potências de dois:
+
+\begin{lstlisting}[language=bash, caption={Listing 11.3 – Histograma de tamanho de pacotes na veth-host.}, label=lst:ex-pkt-hist]
+# TODO: validar com sudo
+sudo bpftrace -e 'tracepoint:net:netif_receive_skb /str(args->name) == "veth-host"/ { @len = hist(args->len); }'
+\end{lstlisting}
+
+Interrompa com \texttt{Ctrl-C} para imprimir o histograma. O filtro usa o campo
+\texttt{name} do \textit{tracepoint}; como o conteúdo dos campos depende do kernel,
+confirme-o com \texttt{bpftrace -lv 'tracepoint:net:netif\_receive\_skb'}.
+
+% ----------------------------------------------------------------
 \section{Monitoramento de conexões}
+% ----------------------------------------------------------------
 
+\textbf{Objetivo.} Identificar quem abre conexões TCP, por quanto tempo elas duram e
+quanto tráfego carregam, associando cada uma a um processo --- a pergunta que o
+\textit{tcpdump} não responde.
+
+O cenário é um servidor HTTP mínimo e alguns clientes. Os comandos abaixo sobem o
+servidor e, em outros terminais, as ferramentas do capítulo \ref{cap:ferramentas-rede}:
+
+\begin{lstlisting}[language=bash, caption={Listing 11.4 – Monitoramento de conexões TCP com ferramentas eBPF.}, label=lst:ex-con]
+# terminal A: servidor de teste
+python3 -m http.server 8099 --bind 127.0.0.1
+
+# terminal B: conexoes novas (use tcpconnect-bpfcc se nao tiver libbpf-tools)
+sudo tcpconnect-libbpf
+
+# terminal C: conexoes encerradas, com duracao e bytes
+sudo tcplife-libbpf
+
+# terminal D: estados do socket via bpftrace (ESTABLISHED = 1)
+sudo bpftrace -e 'tracepoint:sock:inet_sock_set_state /args->newstate == 1/ {
+    printf("%s -> dport %d\n", comm, args->dport); }'
+
+# terminal E: gerar conexoes
+for i in 1 2 3; do curl -s -o /dev/null http://127.0.0.1:8099/; done
+
+# referencia independente: o que o kernel ja conhece
+ss -tni 'sport = :8099'
+\end{lstlisting}
+
+\textbf{O que verificar.} As três ferramentas devem registrar três conexões para a
+porta 8099, todas iniciadas pelo comando \texttt{curl}. O \texttt{tcpconnect} mostra o
+instante e o processo; o \texttt{tcplife} mostra a duração de cada uma depois que
+terminam; o \textit{bpftrace} mostra a transição para \texttt{ESTABLISHED}, tanto
+do lado do cliente quanto do servidor, de modo que as linhas aparecem em dobro (uma
+com o processo \texttt{curl} e outra com o \texttt{python3}). O \texttt{ss} é a
+verificação cruzada, mas só mostra conexões que ainda existem no instante da consulta;
+as curtas do \texttt{curl} já terão terminado. Essa diferença --- o eBPF registra
+\textbf{eventos}, o \texttt{ss} mostra o \textbf{estado atual} --- é o motivo de
+as duas abordagens serem complementares.
+
+Nas rodadas de teste do Manual~1, as versões \texttt{-libbpf} de \texttt{tcpconnect}
+e \texttt{tcplife} executaram, enquanto as versões \texttt{-bpfcc} falharam na
+compilação nesse kernel (capítulo \ref{cap:ferramentas-rede}); por isso o exemplo
+prefere as primeiras. Nos testes, com o servidor na porta 8099, o \texttt{tcpconnect-libbpf}, o
+\texttt{tcplife-libbpf} e o \textit{one-liner} de \texttt{bpftrace} registraram a
+conexão.
+
+\textbf{Retransmissões.} Quando uma conexão está lenta, as retransmissões são o primeiro
+suspeito. Em um laboratório, é possível provocá-las com perda artificial de pacotes
+usando o \texttt{tc netem} no \textit{namespace}, e observá-las com o
+\textit{tracepoint} \texttt{tcp\_retransmit\_skb}:
+
+\begin{lstlisting}[language=bash, caption={Listing 11.5 – Provocação e observação de retransmissões.}, label=lst:ex-retrans]
+# TODO: validar com sudo
+sudo ip netns exec pod1 tc qdisc add dev veth-pod root netem loss 20%
+sudo bpftrace -e 'tracepoint:tcp:tcp_retransmit_skb {
+    printf("%s sport=%d dport=%d\n", comm, args->sport, args->dport); }' &
+sudo ip netns exec pod1 curl -m 5 http://10.200.0.1:8099/
+sudo ip netns exec pod1 tc qdisc del dev veth-pod root
+\end{lstlisting}
+
+Aqui, o \texttt{netem} descarta 20\% dos pacotes que saem do \textit{namespace}. Para
+que o \textit{pod} alcance o servidor, este deve escutar em \texttt{10.200.0.1} (por
+exemplo, \texttt{python3 -m http.server 8099 --bind 10.200.0.1}), e não só em
+\texttt{127.0.0.1}. O \texttt{netem} exige o módulo \texttt{sch\_netem} no kernel, que
+pode estar ausente em configurações mínimas. A expectativa é ver linhas de
+retransmissão com as portas da conexão; o número exato é aleatório, e o campo
+\texttt{comm} pode mostrar um contexto do kernel (como \texttt{ksoftirqd}) em vez de
+\texttt{curl}, pois as retransmissões por temporizador ocorrem fora do contexto do
+processo.
+
+% ----------------------------------------------------------------
 \section{Filtragem de tráfego}
+% ----------------------------------------------------------------
+
+\textbf{Objetivo.} Bloquear e liberar uma origem em tempo de execução, sem recarregar o
+programa, e conferir o efeito pelos contadores do próprio mapa.
+
+O programa é o \textit{firewall} do Listing \ref{lst:seg-fw-xdp}, anexado à
+\texttt{veth-host}. O \textit{namespace} \texttt{pod1} é a origem a bloquear: a
+requisição ICMP do \textit{ping} chega com origem \texttt{10.200.0.2}, o que
+corresponde a \texttt{0a c8 00 02} em bytes.
+
+\begin{lstlisting}[language=bash, caption={Listing 11.6 – Bloqueio e liberação de uma origem com o firewall XDP.}, label=lst:ex-filtro]
+clang -target bpf -O2 -g -I/usr/include/x86_64-linux-gnu \
+      -c fw_xdp.bpf.c -o fw_xdp.bpf.o
+
+sudo mkdir -p /sys/fs/bpf/redes
+sudo bpftool prog loadall fw_xdp.bpf.o /sys/fs/bpf/redes/fw \
+     pinmaps /sys/fs/bpf/redes/fw/maps
+sudo bpftool net attach xdpgeneric pinned /sys/fs/bpf/redes/fw/xdp_fw \
+     dev veth-host
+
+# 1. sem regras: o ping deve funcionar
+sudo ip netns exec pod1 ping -c 2 -W 2 10.200.0.1
+
+# 2. bloquear 10.200.0.2: o ping deve falhar (100% de perda)
+sudo bpftool map update pinned /sys/fs/bpf/redes/fw/maps/blocklist \
+     key hex 0a c8 00 02 value hex 01 00 00 00
+sudo ip netns exec pod1 ping -c 2 -W 2 10.200.0.1
+
+# 3. conferir os contadores (indice 0 = aceitos, 1 = descartados)
+sudo bpftool map dump pinned /sys/fs/bpf/redes/fw/maps/stats
+
+# 4. liberar: o ping deve voltar a funcionar
+sudo bpftool map delete pinned /sys/fs/bpf/redes/fw/maps/blocklist \
+     key hex 0a c8 00 02
+sudo ip netns exec pod1 ping -c 2 -W 2 10.200.0.1
+
+# limpeza
+sudo bpftool net detach xdpgeneric dev veth-host
+sudo rm -r /sys/fs/bpf/redes
+\end{lstlisting}
+
+\textbf{O que verificar.} O passo 1 deve resultar em 0\% de perda, o passo 2 em
+100\% de perda e o passo 4 novamente em 0\%. No passo 3, o contador de índice 1
+(descartados) deve ser maior que zero, sendo a soma dos valores por CPU. O ponto central do exemplo
+é o passo 2: o programa não foi recarregado; mudou-se apenas o conteúdo de um mapa.
+
+\textbf{Variações.} Três mudanças simples, usando o mesmo laboratório, exploram o restante
+do capítulo \ref{cap:seguranca-rede}:
+
+\begin{itemize}
+  \item bloquear uma \textbf{porta} em vez de um IP, preenchendo o mapa
+        \texttt{blocked\_ports} (Listing \ref{lst:seg-regras}) e testando com um
+        servidor na porta bloqueada;
+  \item trocar o programa por \texttt{syn\_guard.bpf.c} (Listing \ref{lst:seg-syn})
+        e disparar muitos SYNs com um laço de \texttt{curl} ou \texttt{nc}, comparando
+        o contador \texttt{descartados} com o limite de 100 por segundo;
+  \item usar \texttt{tc\_egress\_fw.bpf.c} (Listing \ref{lst:seg-tc-egress}) no
+        \textit{namespace}, para impedir que o \textit{pod} abra conexões em uma
+        porta de destino.
+\end{itemize}
+
+Cada variação compila (ver o script de teste), mas nenhuma foi executada.
+
+\textbf{Carregador em C.} O Listing \ref{lst:ferr-libbpf-loader} faz os passos 1 e 2
+em um único programa. O script de teste o chama por três segundos com o endereço do
+\textit{pod} como argumento e verifica se os contadores foram impressos.
+
+\textbf{Resumo do laboratório.} Os três exemplos exercitam, em sequência, a
+observação passiva (XDP com \texttt{XDP\_PASS}), a observação de eventos
+(\texttt{tcpconnect}, \texttt{tcplife}, \textit{bpftrace}) e a ação (\texttt{XDP\_DROP}
+com regras em mapas). É a mesma progressão que o capítulo \ref{cap:seguranca-rede}
+recomenda para qualquer política: observar primeiro, impor depois.

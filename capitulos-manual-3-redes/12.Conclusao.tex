@@ -1,3 +1,32 @@
 \chapter{Conclusão}
+\label{cap:conclusao-redes}
 
+Este manual percorreu a rede do Linux sob a ótica do eBPF. Os capítulos
+\ref{cap:fundamentos} a \ref{cap:tc} estabeleceram a base: onde a pilha de rede
+oferece ganchos, o que o XDP e o TC podem ver e fazer em cada um deles, e como mapas
+BPF levam informação e configuração entre o kernel e o espaço de usuário. O capítulo
+\ref{cap:obs-rede} usou essa base para observar tráfego sem alterá-lo, e o capítulo
+\ref{cap:seguranca-rede} a usou para agir sobre ele, com listas de bloqueio em mapas e
+a limitação de SYN por origem. A progressão se resume em uma regra prática que se
+repete ao longo do texto: observar primeiro, impor depois.
 
+Os capítulos \ref{cap:k8s} e \ref{cap:cilium} levaram as mesmas ideias a contêineres e
+ao Kubernetes, onde a identidade de uma carga de trabalho substitui o endereço IP
+como critério de política, e o Cilium e o Hubble fazem em escala de cluster o que os
+exemplos de laboratório fazem em uma interface. O capítulo \ref{cap:ferramentas-rede}
+mostrou o conjunto de ferramentas (BCC, \textit{bpftrace}, \textit{bpftool} e
+\textit{libbpf}) e o capítulo \ref{cap:exemplos-redes} as reuniu em três cenários
+executáveis. Vale reforçar a distinção feita em cada capítulo: o que é conceitual
+(Kubernetes e Cilium, sem cluster disponível) e o que é executável (o restante), e, entre
+os executáveis, o que foi executado no laboratório (captura, conexões e filtragem XDP) e o que foi
+apenas compilado.
+
+O caminho natural para fechar essa lacuna está na pasta \texttt{testes/} do repositório.
+O script \texttt{09-redes-exemplos.sh} executa os exemplos do capítulo
+\ref{cap:exemplos-redes} em um laboratório com \textit{network namespace}. Em Ubuntu 26.04 com kernel 7.0, ele terminou com 17 testes
+aprovados, e a saída guardada em \texttt{testes/resultados/} é a evidência dos exemplos
+de captura, conexões e filtragem. Ficam sem validação os capítulos de Kubernetes e
+Cilium, o firewall de saída em TC e o limitador de SYN. Para o leitor que deseja avançar, os
+próximos passos são validar esses trechos, em especial os de Kubernetes e Cilium em um
+cluster local de teste, ampliar o \textit{firewall} para IPv6 e rastreamento de conexões, e conectar a
+telemetria de rede à cadeia de Prometheus e Grafana apresentada no Manual~1.

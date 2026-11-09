@@ -1,4 +1,4 @@
-# Testes dos exemplos do Manual 1
+# Testes dos exemplos do Manual 1 (e do Manual 3)
 
 Scripts que executam, em uma máquina real, os comandos e programas citados nos capítulos do Manual 1 (eBPF para Observabilidade). Cada exemplo do texto que não está marcado com `% TODO` foi validado por um destes scripts.
 
@@ -32,3 +32,13 @@ O `08` pertence ao Manual 2, não ao Manual 1. Dois blocos do cap. 9 seguem marc
 ## Resultados
 
 A pasta `resultados/` guarda a saída de cada execução. Ela é a evidência dos números citados no texto, como as 11 de 14 ferramentas do BCC que falharam ao compilar neste kernel e as 13 de 14 versões `-libbpf` que rodaram. O resultado do `02` mostra a causa: erros de compilação do BCC nos cabeçalhos do kernel 7.0.
+
+## Manual 3 (eBPF para Redes)
+
+O script `09-redes-exemplos.sh` é do **Manual 3**, não do Manual 1. Ele executa os três exemplos do capítulo 11 (captura de pacotes, monitoramento de conexões e filtragem) em um laboratório com `network namespace` e par `veth`, e compila os programas do capítulo 7 e do capítulo 10, cujos fontes estão em `testes/redes/`. Requer `clang`, `libbpf-dev`, `bpftool`, `bpftrace` e `tcpdump`; as ferramentas de conexão (`tcpconnect`, `tcplife`) são opcionais.
+
+```bash
+sudo bash testes/09-redes-exemplos.sh 2>&1 | tee testes/resultados/09-redes-exemplos.txt
+```
+
+**Estado:** o script passa em `bash -n` e os programas de `testes/redes/` compilam com `clang -target bpf`, mas ele **ainda não foi executado com `root`**. Por isso não há arquivo em `resultados/` para ele, e os blocos correspondentes nos capítulos 7 a 11 do Manual 3 trazem `% TODO: validar com sudo` até que a saída seja gerada. Os capítulos 8 e 9 (Kubernetes e Cilium) são conceituais e não têm script: não havia cluster disponível.

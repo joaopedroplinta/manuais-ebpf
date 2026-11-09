@@ -1,9 +1,323 @@
 \chapter{eBPF em Containers e Kubernetes}
+\label{cap:k8s}
 
+Contêineres são processos comuns do Linux isolados por \textit{namespaces} e
+\textit{cgroups}; Kubernetes é o orquestrador que decide onde esses contêineres
+executam e como se comunicam. Esse arranjo cria exigências novas para a rede: milhares
+de endereços efêmeros, políticas baseadas em rótulos e não em endereços fixos, e
+balanceamento entre réplicas de um mesmo serviço. O eBPF entra exatamente nesses
+pontos, pois permite implementar encaminhamento, balanceamento e filtragem dentro do
+kernel, sem a cadeia de regras do \textit{netfilter} \cite{linuxkernel2024, ciliumdocs}.
+
+\textbf{Aviso de escopo.} Este capítulo é, em sua maior parte, \textbf{conceitual}. Não
+havia um cluster Kubernetes disponível durante a escrita do manual. Os blocos marcados
+como \textbf{executáveis} usam apenas ferramentas do próprio Linux (\texttt{ip},
+\texttt{bpftool}) e rodam em qualquer máquina com privilégio de administrador. Os blocos
+marcados como \textbf{exemplo de manifesto} ou \textbf{comando de cluster} descrevem o
+que se esperaria de um cluster real, mas \textbf{não foram executados}; seus manifestos
+YAML foram apenas verificados quanto à sintaxe.
+
+% ----------------------------------------------------------------
 \section{Networking em Containers e Kubernetes}
+% ----------------------------------------------------------------
 
+\subsection*{O que é um contêiner do ponto de vista da rede}
+
+Um contêiner recebe seu próprio \textit{network namespace}: uma pilha de rede isolada,
+com interfaces, tabela de roteamento e regras de \textit{firewall} próprias. Para
+conectar esse \textit{namespace} ao restante do sistema, o ambiente cria um par de
+interfaces virtuais \texttt{veth}, que funcionam como as duas pontas de um cabo: o que
+entra por uma ponta sai pela outra. Uma ponta fica dentro do contêiner (tipicamente
+chamada \texttt{eth0}) e a outra permanece no \textit{namespace} do \textit{host}, onde
+é conectada a uma ponte (\textit{bridge}) ou tratada diretamente pelo plugin de rede
+\cite{linuxkernel2024}.
+
+Esse mecanismo pode ser reproduzido à mão, sem Docker nem Kubernetes. O bloco a seguir
+é \textbf{executável} e é a base do laboratório do capítulo \ref{cap:exemplos-redes}:
+
+\begin{lstlisting}[language=bash, caption={Listing 8.1 – Emulação de um contêiner com network namespace e par veth (executável, requer root).}, label=lst:k8s-veth]
+# TODO: validar com sudo
+sudo ip netns add pod1
+sudo ip link add veth-host type veth peer name veth-pod
+sudo ip link set veth-pod netns pod1
+
+sudo ip addr add 10.200.0.1/24 dev veth-host
+sudo ip link set veth-host up
+sudo ip netns exec pod1 ip addr add 10.200.0.2/24 dev veth-pod
+sudo ip netns exec pod1 ip link set veth-pod up
+sudo ip netns exec pod1 ip link set lo up
+
+# teste de conectividade do "pod" ate o host
+sudo ip netns exec pod1 ping -c 2 10.200.0.1
+
+# limpeza (remove tambem o veth)
+sudo ip netns del pod1
+\end{lstlisting}
+
+O ponto relevante para o eBPF é que a ponta \texttt{veth-host} é uma interface comum
+do \textit{host}: é possível anexar a ela um programa XDP (no modo genérico) ou TC, e
+assim observar ou filtrar todo o tráfego que entra e sai do contêiner, sem tocar
+no seu interior. É isso que os plugins de rede baseados em eBPF fazem para cada \textit{pod}
+\cite{ciliumdocs}.
+
+\subsection*{O modelo de rede do Kubernetes}
+
+O Kubernetes define algumas exigências para a rede do cluster:
+
+\begin{itemize}
+  \item cada \textit{pod} recebe um endereço IP próprio, e todos os contêineres de um
+        mesmo \textit{pod} compartilham o mesmo \textit{network namespace};
+  \item todo \textit{pod} deve conseguir se comunicar com qualquer outro \textit{pod}
+        do cluster, sem NAT entre eles;
+  \item \textit{serviços} (\texttt{Service}) oferecem um endereço virtual estável
+        que distribui as conexões entre as réplicas (\textit{pods}) de uma aplicação.
+\end{itemize}
+
+O Kubernetes não implementa essa rede por conta própria; ele delega a um plugin
+(CNI, seção seguinte) e, para os serviços, a um componente chamado
+\texttt{kube-proxy} ou a uma alternativa. Cada uma dessas peças é um ponto onde o
+eBPF pode substituir mecanismos tradicionais.
+
+\subsection*{Onde o eBPF se encaixa}
+
+\begin{table}[h]
+\centering
+\caption{Mecanismos tradicionais de rede em Kubernetes e o papel do eBPF.}
+\label{tab:k8s-ebpf}
+\begin{tabular}{P{3.6cm} P{4.6cm} P{5.6cm}}
+\hline
+\textbf{Função} & \textbf{Mecanismo tradicional} & \textbf{Alternativa com eBPF} \\
+\hline
+Encaminhamento entre \textit{pods} & \textit{bridge} Linux, rotas, \textit{overlay} VXLAN & programas TC/XDP na \texttt{veth} do \textit{pod}, redirecionamento direto \\
+Balanceamento de \texttt{Service} & regras \textit{iptables} ou IPVS do \texttt{kube-proxy} & mapas BPF com os \textit{backends} e seleção no kernel \\
+Política de rede & regras \textit{iptables} geradas a partir da \texttt{NetworkPolicy} & verificação por identidade em mapas BPF \\
+Observabilidade & \textit{tcpdump}, contadores de interface & programas BPF que emitem eventos de fluxo \\
+\hline
+\end{tabular}
+\end{table}
+
+A motivação mais citada para a substituição é a escala: com o \textit{iptables}, o
+número de regras cresce com o número de serviços e \textit{pods}, e o custo de
+atualizar e percorrer a lista cresce junto; consultas em mapas \texttt{HASH} do BPF
+têm custo aproximadamente constante \cite{ciliumdocs, gregg2019}. Esse argumento é
+teórico neste manual: nenhuma medição comparativa foi feita aqui.
+
+% ----------------------------------------------------------------
 \section{CNI}
+% ----------------------------------------------------------------
 
+\textit{Container Network Interface} (CNI) é uma especificação que define como um
+\textit{runtime} de contêineres configura a rede de um contêiner \cite{cnispec}.
+Quando o \textit{kubelet} cria um \textit{pod}, o \textit{runtime} cria o
+\textit{network namespace} e invoca o plugin CNI configurado no nó. O plugin é um
+executável que recebe, por variáveis de ambiente e por um JSON na entrada padrão, o
+comando (\texttt{ADD}, \texttt{DEL}, \texttt{CHECK}), o identificador do contêiner e o
+caminho do \textit{namespace}, e devolve o resultado (endereço IP atribuído, rotas)
+\cite{cnispec}.
+
+Na operação \texttt{ADD}, um plugin típico executa a sequência já vista no
+Listing \ref{lst:k8s-veth}: cria o par \texttt{veth}, move uma ponta para o
+\textit{namespace} do \textit{pod}, atribui um endereço IP e instala as rotas. Um
+plugin baseado em eBPF acrescenta um passo: \textbf{anexa um programa TC ou XDP à
+ponta do \textit{host}} e registra o \textit{pod} em mapas BPF (endereço, interface,
+identidade), de modo que o kernel já saiba tratá-lo no primeiro pacote.
+
+A configuração do CNI de um nó fica, por convenção, em \texttt{/etc/cni/net.d/} e os
+binários dos plugins em \texttt{/opt/cni/bin/}. Os comandos a seguir apenas
+\textbf{inspecionam} um nó; eles são seguros, mas só produzem resultado em um nó
+Kubernetes real, portanto \textbf{não foram executados} nesta máquina:
+
+\begin{lstlisting}[language=bash, caption={Listing 8.2 – Inspeção da configuração CNI em um nó (comando de cluster, não executado).}, label=lst:k8s-cni-inspect]
+# TODO: validar em um no Kubernetes
+ls /etc/cni/net.d/
+cat /etc/cni/net.d/*.conf*
+ls /opt/cni/bin/
+\end{lstlisting}
+
+A escolha do plugin determina o que é possível. Plugins simples, como \texttt{bridge}
+combinado com \texttt{host-local}, apenas conectam o \textit{pod}; plugins mais
+completos, como o Cilium (capítulo \ref{cap:cilium}), assumem também a política de
+rede, o balanceamento de serviços e a observabilidade usando eBPF \cite{ciliumdocs}.
+Trocar o CNI de um cluster existente é uma operação delicada, que normalmente exige
+reiniciar os \textit{pods}; por isso, a escolha costuma ser feita na criação do
+cluster.
+
+% ----------------------------------------------------------------
 \section{Network Policies}
+% ----------------------------------------------------------------
 
+Por padrão, o Kubernetes é permissivo: todo \textit{pod} aceita tráfego de qualquer
+outro. Uma \texttt{NetworkPolicy} é um recurso que restringe esse comportamento,
+selecionando \textit{pods} por rótulo e listando de quem eles podem receber tráfego
+(\textit{ingress}) e para quem podem enviar (\textit{egress}) \cite{k8snetpol}.
+
+Dois pontos sobre a semântica merecem destaque. Primeiro, a \texttt{NetworkPolicy} é
+apenas uma \textbf{declaração}: o objeto é armazenado no cluster, mas \textbf{quem a
+aplica é o plugin de rede}. Um CNI que não implementa políticas aceita o objeto e
+simplesmente o ignora \cite{k8snetpol}. Segundo, a política é \textbf{aditiva}: a partir do momento em que algum
+objeto seleciona um \textit{pod} para um sentido, o tráfego nesse sentido passa a ser
+negado, exceto o que alguma regra permita explicitamente.
+
+O manifesto a seguir é um \textbf{exemplo de manifesto}, \textbf{não aplicado a um
+cluster}. Ele permite que apenas \textit{pods} com o rótulo \texttt{app: web} acessem
+o banco de dados na porta 5432:
+
+\begin{lstlisting}[caption={Listing 8.3 – NetworkPolicy que restringe o acesso ao banco de dados (exemplo de manifesto).}, label=lst:k8s-netpol]
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: db-permite-web
+  namespace: loja
+spec:
+  podSelector:
+    matchLabels:
+      app: db
+  policyTypes:
+    - Ingress
+  ingress:
+    - from:
+        - podSelector:
+            matchLabels:
+              app: web
+      ports:
+        - protocol: TCP
+          port: 5432
+\end{lstlisting}
+
+Uma prática comum é partir de uma política de \textbf{negação padrão} e liberar o
+necessário em seguida. A política vazia abaixo seleciona todos os \textit{pods} do
+\textit{namespace} e, por não listar nenhuma regra de entrada, nega todo o tráfego
+recebido:
+
+\begin{lstlisting}[caption={Listing 8.4 – Negação padrão de entrada em um namespace (exemplo de manifesto).}, label=lst:k8s-deny]
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: negar-entrada
+  namespace: loja
+spec:
+  podSelector: {}
+  policyTypes:
+    - Ingress
+\end{lstlisting}
+
+\textbf{Como o eBPF aplica essas políticas.} Um CNI baseado em eBPF não traduz a
+política em uma lista de regras de \textit{iptables} por endereço. Em vez disso, ele
+atribui uma \textbf{identidade} numérica a cada conjunto de \textit{pods} com os mesmos
+rótulos e grava no mapa BPF quais pares de identidades podem se comunicar. No
+caminho do pacote, o programa TC identifica a identidade da origem, consulta o mapa e
+decide entre aceitar e descartar \cite{ciliumdocs}. Como a regra refere-se a
+identidades e não a endereços, um \textit{pod} que é recriado com outro IP continua
+coberto pela política sem reconfiguração. Esse é o mesmo padrão de lista de
+bloqueio em mapa do capítulo \ref{cap:seguranca-rede}, com identidades no lugar de
+endereços.
+
+Aplicar e consultar as políticas em um cluster faz-se com o \texttt{kubectl}:
+
+\begin{lstlisting}[language=bash, caption={Listing 8.5 – Aplicação e consulta de políticas com kubectl (comando de cluster, não executado).}, label=lst:k8s-kubectl-netpol]
+# TODO: validar em um cluster Kubernetes
+kubectl apply -f db-permite-web.yaml
+kubectl get networkpolicy -n loja
+kubectl describe networkpolicy db-permite-web -n loja
+\end{lstlisting}
+
+% ----------------------------------------------------------------
 \section{Comunicação entre Pods e Serviços}
+% ----------------------------------------------------------------
+
+\subsection*{Pod para pod}
+
+Quando dois \textit{pods} estão no mesmo nó, o tráfego percorre as duas pontas
+\texttt{veth} e o caminho local do \textit{host}. Quando estão em nós diferentes, o
+pacote atravessa a rede entre nós, seja por roteamento direto, seja encapsulado em um
+túnel (\textit{overlay}, como VXLAN ou Geneve). Com eBPF, o redirecionamento pode ser
+feito pelo próprio programa TC da \texttt{veth}, por meio de helpers como
+\texttt{bpf\_redirect}, evitando a travessia da pilha de roteamento do \textit{host}
+quando o destino é local \cite{linuxkernel2024, ciliumdocs}.
+
+\subsection*{Pod para serviço}
+
+Um \texttt{Service} do tipo \texttt{ClusterIP} possui um endereço virtual que
+\textbf{não pertence a nenhuma interface}. Para que a conexão chegue a uma réplica
+real, algum componente precisa substituir o endereço virtual pelo de um \textit{pod}
+\textit{backend}. No modelo tradicional, o \texttt{kube-proxy} faz isso instalando
+regras \textit{iptables} (ou IPVS) que realizam DNAT a cada pacote novo, e o
+\textit{conntrack} garante que os pacotes seguintes da conexão sigam o mesmo caminho.
+
+Uma implementação eBPF pode agir de duas formas \cite{ciliumdocs}:
+
+\begin{itemize}
+  \item \textbf{Na camada de pacote}: um programa TC ou XDP traduz o endereço de
+        destino consultando um mapa de serviços e reescreve os cabeçalhos, de
+        forma análoga ao DNAT do \textit{netfilter}, porém com tabelas indexadas;
+  \item \textbf{Na camada de soquete}: um programa anexado ao \textit{cgroup} do
+        \textit{pod}, nos ganchos de \texttt{connect()} (tipos
+        \texttt{cgroup/connect4} e \texttt{cgroup/connect6}), troca o endereço do
+        serviço pelo endereço de um \textit{backend} \textbf{antes} de o pacote existir.
+        A conexão já nasce destinada ao \textit{pod} real, e nenhum pacote
+        precisa ser reescrito no caminho.
+\end{itemize}
+
+A segunda abordagem elimina a tradução por pacote para o tráfego iniciado dentro do
+cluster. Ela é possível porque o gancho \texttt{cgroup/connect4} do eBPF permite que um
+programa altere o endereço de destino de uma chamada \texttt{connect()} no momento em
+que ela é feita (tipo de programa \texttt{BPF\_PROG\_TYPE\_CGROUP\_SOCK\_ADDR})
+\cite{linuxkernel2024}. A \textit{observação} que se obtém dessa abordagem é um efeito
+colateral importante: como a tradução ocorre antes do pacote, ferramentas como o
+\textit{tcpdump} dentro do \textit{pod} já enxergam o endereço do \textit{backend}, e
+não o do serviço.
+
+O programa de exemplo abaixo ilustra o formato desse tipo de gancho. Ele
+\textbf{é um esboço didático}: apenas redireciona conexões para um endereço fixo e não
+consulta mapa de serviços, balanceamento nem trata erros. Foi verificado apenas
+quanto à compilação.
+
+\begin{lstlisting}[caption={Listing 8.6 – Esboço de redirecionamento no gancho cgroup/connect4 (didático).}, label=lst:k8s-connect4]
+#include <linux/bpf.h>
+#include <bpf/bpf_helpers.h>
+#include <bpf/bpf_endian.h>
+
+#define SVC_IP    0x0a600001  /* 10.96.0.1, "ClusterIP" ficticio */
+#define BACKEND   0x0ac80002  /* 10.200.0.2, "pod" ficticio */
+
+SEC("cgroup/connect4")
+int redireciona(struct bpf_sock_addr *ctx)
+{
+    if (ctx->user_ip4 == bpf_htonl(SVC_IP) &&
+        ctx->user_port == bpf_htons(80)) {
+        ctx->user_ip4 = bpf_htonl(BACKEND);
+    }
+    return 1;   /* 1 = permitir a chamada connect() */
+}
+
+char LICENSE[] SEC("license") = "GPL";
+\end{lstlisting}
+
+\subsection*{Tráfego externo e DNS}
+
+Serviços dos tipos \texttt{NodePort} e \texttt{LoadBalancer} expõem o serviço fora do
+cluster. O tráfego de entrada chega a um nó, que precisa escolher um \textit{backend}
+(possivelmente em outro nó) e preservar, quando possível, o endereço de origem do
+cliente. O XDP é um bom ponto para essa decisão, pois age antes da pilha
+\cite{ciliumdocs}. A resolução de nomes (DNS) é um serviço do cluster como qualquer
+outro, e é nesse tráfego que muitas falhas de rede em Kubernetes se manifestam; a
+observação de consultas DNS com eBPF é abordada no capítulo \ref{cap:cilium} com o
+Hubble.
+
+\subsection*{Depuração}
+
+Quando um \textit{pod} não alcança um serviço, os comandos abaixo ajudam a localizar a
+camada com defeito. São \textbf{comandos de cluster}, não executados nesta máquina:
+
+\begin{lstlisting}[language=bash, caption={Listing 8.7 – Passos de depuração de conectividade em um cluster (não executado).}, label=lst:k8s-debug]
+# TODO: validar em um cluster Kubernetes
+kubectl get svc,endpoints -n loja          # o servico tem backends?
+kubectl get pods -o wide -n loja           # em que no e IP estao os pods?
+kubectl exec -it POD -n loja -- nslookup db   # o DNS resolve o servico?
+kubectl exec -it POD -n loja -- nc -zv db 5432  # a porta responde?
+\end{lstlisting}
+
+Se o serviço não tiver \textit{endpoints}, o problema está nos rótulos ou na saúde dos
+\textit{pods}, e não na rede. Se tiver, mas a conexão falhar, o suspeito passa a ser
+uma política de rede (Listing \ref{lst:k8s-netpol}), cuja ação de descarte pode ser
+observada com as ferramentas do capítulo \ref{cap:cilium}.

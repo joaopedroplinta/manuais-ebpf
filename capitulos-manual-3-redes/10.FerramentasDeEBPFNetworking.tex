@@ -1,9 +1,291 @@
 \chapter{Ferramentas de eBPF Networking}
+\label{cap:ferramentas-rede}
 
+Os capítulos anteriores escreveram programas eBPF à mão. Na prática, boa parte do
+trabalho com rede começa em ferramentas prontas: para descobrir \textit{o que está
+acontecendo} usa-se BCC ou \textit{bpftrace}; para inspecionar \textit{o que está
+carregado} usa-se \textit{bpftool}; para entregar uma solução própria, usa-se
+\textit{libbpf}. Este capítulo apresenta as quatro ferramentas com foco em rede e
+mostra como se encaixam, na mesma ordem em que costumam ser necessárias
+\cite{gregg2019, gregg2020}.
+
+\textbf{Sobre a validação.} Os comandos de rede do BCC e do \textit{bpftrace} citados
+aqui foram executados nas rodadas de teste do Manual 1 (pasta \texttt{testes/} e
+\texttt{testes/resultados/}), em Ubuntu 26.04 com kernel 7.0. O resultado dessa
+rodada é relevante para a escolha da ferramenta: nesse kernel, as versões em Python do
+BCC \texttt{tcpconnect-bpfcc}, \texttt{tcpretrans-bpfcc} e \texttt{tcplife-bpfcc}
+\textbf{falharam na compilação} contra os cabeçalhos do kernel, enquanto as versões
+\texttt{tcpconnect-libbpf} e \texttt{tcplife-libbpf} e os \textit{one-liners} de
+\textit{bpftrace} executaram. Em outro kernel ou distribuição, o resultado pode ser
+diferente. Os blocos que ainda não foram executados no contexto específico do Manual~3
+trazem a marca \texttt{\% TODO: validar com sudo}.
+
+% ----------------------------------------------------------------
 \section{BCC}
+% ----------------------------------------------------------------
 
+O BCC (\textit{BPF Compiler Collection}) é uma coleção de ferramentas escritas em Python
+cujo núcleo em C é compilado em tempo de execução com o LLVM, contra os cabeçalhos do
+kernel em uso \cite{bcc}. Ele traz dezenas de utilitários de linha de comando
+prontos, entre eles os de rede mais usados. Nas distribuições Debian e Ubuntu,
+são instalados pelo pacote \texttt{bpfcc-tools} com o sufixo \texttt{-bpfcc} (por
+exemplo, \texttt{tcpconnect-bpfcc}); em outras distribuições, o nome é simplesmente
+\texttt{tcpconnect}.
+
+\begin{table}[h]
+\centering
+\caption{Ferramentas do BCC voltadas a rede.}
+\label{tab:bcc-rede}
+\begin{tabular}{P{2.8cm} P{10.6cm}}
+\hline
+\textbf{Ferramenta} & \textbf{O que mostra} \\
+\hline
+\texttt{tcpconnect} & cada conexão TCP ativa (\texttt{connect()}) com PID, comando, endereços e porta \\
+\texttt{tcpaccept} & cada conexão TCP passiva aceita (\texttt{accept()}) \\
+\texttt{tcplife} & conexões TCP encerradas, com duração e bytes transferidos \\
+\texttt{tcpretrans} & retransmissões TCP, com endereços e estado da conexão \\
+\texttt{tcptop} & volume de bytes por conexão, em formato semelhante ao \texttt{top} \\
+\hline
+\end{tabular}
+\end{table}
+
+Todas exigem privilégio de administrador. Os exemplos abaixo usam o nome com sufixo
+do Ubuntu:
+
+\begin{lstlisting}[language=bash, caption={Listing 10.1 – Ferramentas de rede do BCC.}, label=lst:ferr-bcc]
+# TODO: validar com sudo
+sudo tcpconnect-bpfcc            # novas conexoes de saida
+sudo tcpconnect-bpfcc -p 1234    # apenas o PID 1234
+sudo tcpaccept-bpfcc             # conexoes aceitas por servidores locais
+sudo tcplife-bpfcc               # conexoes encerradas, com duracao e bytes
+sudo tcpretrans-bpfcc            # retransmissoes
+\end{lstlisting}
+
+O campo mais valioso dessas saídas é o \textbf{PID e o nome do comando}: diferente do
+\textit{tcpdump}, que enxerga pacotes, as ferramentas do BCC ligam a conexão ao
+processo que a criou, porque observam chamadas de função do kernel no contexto desse
+processo \cite{gregg2019}. Para saber \textit{quem} está falando com o exterior, é a
+informação decisiva.
+
+\textbf{Limitação.} A compilação em tempo de execução exige o compilador LLVM e os
+cabeçalhos do kernel instalados no sistema, o que os torna pesados para servidores de
+produção e sensíveis a incompatibilidades entre versões de kernel, como a observada na
+rodada de testes do Manual~1. A alternativa moderna são as versões CO-RE do mesmo
+conjunto de ferramentas, descritas na seção sobre \textit{libbpf}.
+
+% ----------------------------------------------------------------
 \section{bpftrace}
+% ----------------------------------------------------------------
 
+O \textit{bpftrace} é uma linguagem de alto nível para rastreamento: o usuário escreve
+uma sonda e uma ação em poucas linhas, e a ferramenta compila e carrega o programa
+eBPF \cite{bpftrace}. É o instrumento ideal para perguntas ad hoc, que ainda não
+justificam um programa C.
+
+Todos os \textit{one-liners} abaixo usam pontos de rastreamento estáveis do kernel
+(\textit{tracepoints}) ou funções do TCP; os mesmos pontos já apareceram no capítulo
+\ref{cap:obs-rede}:
+
+\begin{lstlisting}[language=bash, caption={Listing 10.2 – One-liners de rede em bpftrace.}, label=lst:ferr-bpftrace]
+# TODO: validar com sudo
+# quem esta enviando dados por TCP (bytes por processo)
+sudo bpftrace -e 'kprobe:tcp_sendmsg { @bytes[comm] = sum(arg2); }'
+
+# retransmissoes TCP, com processo e portas
+sudo bpftrace -e 'tracepoint:tcp:tcp_retransmit_skb {
+    printf("%s sport=%d dport=%d\n", comm, args->sport, args->dport); }'
+
+# transicoes de estado de conexoes TCP
+sudo bpftrace -e 'tracepoint:sock:inet_sock_set_state {
+    printf("%s %d -> %d sport=%d dport=%d\n", comm,
+           args->oldstate, args->newstate, args->sport, args->dport); }'
+
+# histograma de tamanho dos pacotes recebidos (tracepoint de rede generico)
+sudo bpftrace -e 'tracepoint:net:netif_receive_skb { @len = hist(args->len); }'
+\end{lstlisting}
+
+Os três primeiros \textit{one-liners} têm correspondentes executados com sucesso
+na rodada de testes do Manual~1 (\texttt{tcp\_sendmsg sum}, \texttt{tcp\_retransmit\_skb} e
+\texttt{inet\_sock\_set\_state}); o histograma sobre \texttt{netif\_receive\_skb} é
+novo neste manual e depende de o \textit{tracepoint} existir no kernel em uso.
+Para conferir os pontos disponíveis, a listagem faz parte do próprio \textit{bpftrace}:
+
+\begin{lstlisting}[language=bash, caption={Listing 10.3 – Descoberta de pontos de rastreamento de rede.}, label=lst:ferr-bpftrace-list]
+# TODO: validar com sudo
+sudo bpftrace -l 'tracepoint:net:*'
+sudo bpftrace -l 'tracepoint:tcp:*'
+sudo bpftrace -l 'kprobe:tcp_*' | head
+sudo bpftrace -lv 'tracepoint:tcp:tcp_retransmit_skb'
+\end{lstlisting}
+
+A opção \texttt{-lv} mostra os campos de \texttt{args}, o que evita adivinhar nomes
+como \texttt{sport} e \texttt{dport}. Esses campos pertencem à interface do
+\textit{tracepoint} e podem variar entre versões do kernel.
+
+\textbf{Limitação.} O \textit{bpftrace} não anexa programas a XDP ou TC, que são os
+ganchos da \textit{ação} sobre pacotes; ele serve para observar. Decisões de
+descartar, redirecionar ou modificar exigem programas escritos em C (capítulos
+\ref{cap:xdp} e \ref{cap:tc}) \cite{linuxkernel2024}.
+
+% ----------------------------------------------------------------
 \section{bpftool}
+% ----------------------------------------------------------------
 
+O \textit{bpftool} é a ferramenta oficial de inspeção e administração do subsistema
+BPF, mantida junto ao código do kernel \cite{linuxkernel2024}. Para rede, três
+subcomandos concentram o uso: \texttt{prog}, \texttt{map} e \texttt{net}.
+
+\begin{lstlisting}[language=bash, caption={Listing 10.4 – Inspeção de programas, mapas e ganchos de rede com bpftool.}, label=lst:ferr-bpftool]
+# TODO: validar com sudo
+sudo bpftool prog show                 # todos os programas carregados
+sudo bpftool prog show type xdp        # apenas programas XDP
+sudo bpftool prog dump xlated id 42    # codigo apos o verificador
+sudo bpftool prog dump jited id 42     # codigo de maquina gerado
+
+sudo bpftool map show                  # todos os mapas
+sudo bpftool map dump id 7             # conteudo de um mapa
+
+sudo bpftool net show                  # XDP, TC e outros anexos por interface
+sudo bpftool net show dev eth0
+
+sudo bpftool prog tracelog             # le a saida de bpf_printk (trace_pipe)
+\end{lstlisting}
+
+O \texttt{bpftool net show} responde a uma pergunta que nenhuma outra ferramenta
+responde com tanta clareza: \textbf{que programas eBPF estão ligados à rede deste
+sistema?} Ele lista, por interface, os programas XDP, TC e de \textit{flow dissector}
+e, em seções separadas, os anexos de \textit{cgroup}. É o primeiro comando a executar ao
+investigar um nó desconhecido, em especial um nó Kubernetes com Cilium (capítulo
+\ref{cap:cilium}), e também a forma de conferir se um programa realmente foi desanexado
+depois de um experimento.
+
+O \texttt{bpftool} também administra o ciclo de vida: carregar (\texttt{prog load},
+\texttt{prog loadall}), anexar (\texttt{net attach}, \texttt{net detach}) e editar mapas
+(\texttt{map update}, \texttt{map delete}), como no Listing \ref{lst:seg-regras}. E,
+com \texttt{btf dump} e \texttt{gen skeleton}, ele prepara o terreno para a \textit{libbpf}:
+
+\begin{lstlisting}[language=bash, caption={Listing 10.5 – Geração de vmlinux.h e do esqueleto (skeleton) com bpftool.}, label=lst:ferr-bpftool-gen]
+bpftool btf dump file /sys/kernel/btf/vmlinux format c > vmlinux.h
+bpftool gen skeleton fw_xdp.bpf.o > fw_xdp.skel.h
+\end{lstlisting}
+
+O segundo comando foi executado sobre o objeto do Listing \ref{lst:seg-fw-xdp} e
+gerou o cabeçalho sem erros; ambos dispensam privilégio de administrador, pois só
+leem arquivos.
+
+% ----------------------------------------------------------------
 \section{libbpf}
+% ----------------------------------------------------------------
+
+A \textit{libbpf} é a biblioteca C oficial para carregar e gerenciar programas eBPF a
+partir do espaço de usuário \cite{libbpf, nakryiko2020}. O modelo recomendado é
+\textbf{CO-RE} (\textit{Compile Once, Run Everywhere}): o programa é compilado uma vez,
+com informações de tipo BTF, e a biblioteca ajusta os acessos a estruturas do kernel
+no momento do carregamento, o que dispensa os cabeçalhos do kernel instalados no alvo
+\cite{nakryiko2020}. Essa é a diferença essencial em relação ao BCC e a razão de as
+versões \texttt{-libbpf} das ferramentas terem funcionado onde as de Python
+falharam. Elas são empacotadas em Debian e Ubuntu como \texttt{libbpf-tools}:
+
+\begin{lstlisting}[language=bash, caption={Listing 10.6 – Ferramentas de rede da libbpf-tools.}, label=lst:ferr-libbpf-tools]
+sudo tcpconnect-libbpf
+sudo tcplife-libbpf
+\end{lstlisting}
+
+Para uma solução própria, o fluxo é: escrever o programa (arquivo \texttt{.bpf.c}),
+compilar com \texttt{clang -target bpf}, gerar o esqueleto com \texttt{bpftool gen
+skeleton} e escrever um \textit{carregador} em C que usa as funções geradas. O
+carregador a seguir completa o programa do Listing \ref{lst:seg-fw-xdp}: carrega o
+objeto, preenche opcionalmente a lista de bloqueio com um IP recebido na linha de
+comando, anexa o XDP à interface e imprime os contadores a cada segundo.
+
+\begin{lstlisting}[caption={Listing 10.7 – Carregador libbpf para o firewall XDP (fw\_loader.c).}, label=lst:ferr-libbpf-loader]
+#include <stdio.h>
+#include <stdlib.h>
+#include <unistd.h>
+#include <signal.h>
+#include <arpa/inet.h>
+#include <net/if.h>
+#include <linux/if_link.h>
+#include <bpf/libbpf.h>
+#include <bpf/bpf.h>
+#include "fw_xdp.skel.h"
+
+static volatile sig_atomic_t parar;
+static void sai(int s) { parar = 1; }
+
+int main(int argc, char **argv)
+{
+    if (argc < 2) {
+        fprintf(stderr, "uso: %s <interface> [ip_a_bloquear]\n", argv[0]);
+        return 1;
+    }
+    int ifindex = if_nametoindex(argv[1]);
+    if (!ifindex) { perror("if_nametoindex"); return 1; }
+
+    struct fw_xdp_bpf *skel = fw_xdp_bpf__open_and_load();
+    if (!skel) { fprintf(stderr, "falha ao carregar o programa\n"); return 1; }
+
+    if (argc > 2) {
+        struct in_addr a;
+        __u32 v = 1;
+        if (inet_pton(AF_INET, argv[2], &a) != 1) {
+            fprintf(stderr, "IP invalido\n");
+            return 1;
+        }
+        /* a.s_addr ja esta em ordem de rede, como no pacote */
+        bpf_map_update_elem(bpf_map__fd(skel->maps.blocklist),
+                            &a.s_addr, &v, BPF_ANY);
+    }
+
+    struct bpf_link *link =
+        bpf_program__attach_xdp(skel->progs.xdp_fw, ifindex);
+    if (!link) { fprintf(stderr, "falha ao anexar o XDP\n"); return 1; }
+
+    signal(SIGINT, sai);
+    int ncpu = libbpf_num_possible_cpus();
+    __u64 *vals = calloc(ncpu, sizeof(__u64));
+    while (!parar) {
+        sleep(1);
+        for (__u32 k = 0; k < 2; k++) {
+            __u64 soma = 0;
+            if (bpf_map_lookup_elem(bpf_map__fd(skel->maps.stats),
+                                    &k, vals) == 0)
+                for (int i = 0; i < ncpu; i++)
+                    soma += vals[i];
+            printf("%s=%llu ", k ? "descartados" : "aceitos",
+                   (unsigned long long)soma);
+        }
+        printf("\n");
+    }
+    bpf_link__destroy(link);
+    fw_xdp_bpf__destroy(skel);
+    return 0;
+}
+\end{lstlisting}
+
+A compilação e a execução seguem:
+
+\begin{lstlisting}[language=bash, caption={Listing 10.8 – Compilação e execução do carregador.}, label=lst:ferr-libbpf-build]
+clang -target bpf -O2 -g -I/usr/include/x86_64-linux-gnu \
+      -c fw_xdp.bpf.c -o fw_xdp.bpf.o
+bpftool gen skeleton fw_xdp.bpf.o > fw_xdp.skel.h
+gcc -O2 -Wall -I. fw_loader.c -o fw_loader -lbpf -lelf -lz
+
+sudo ./fw_loader eth0 10.0.0.2    # Ctrl-C desanexa o programa
+\end{lstlisting}
+
+Os três primeiros comandos (compilar o objeto, gerar o esqueleto e compilar o
+carregador) foram executados sem privilégio de administrador e terminaram sem erros
+nesta máquina. A \textbf{execução} do carregador, que carrega o programa no kernel,
+\textbf{ainda não foi realizada}. A anexação via \texttt{bpf\_program\_\_attach\_xdp}
+usa o modo escolhido pelo kernel; para forçar o modo genérico em uma interface sem
+suporte nativo, a API \texttt{bpf\_xdp\_attach} aceita a flag
+\texttt{XDP\_FLAGS\_SKB\_MODE}.
+
+\textbf{Quando usar cada ferramenta.} A regra geral deste manual é: comece pelo mais
+simples que responde à pergunta. Uma pergunta pontual ("quem abriu essa conexão?")
+pede \texttt{tcpconnect} ou um \textit{one-liner} de \textit{bpftrace}. Uma pergunta
+sobre o estado do sistema ("que programas estão ligados à rede?") pede
+\texttt{bpftool net}. Uma solução que precisa durar, ser distribuída ou agir sobre
+pacotes pede um programa próprio com \textit{libbpf}. O capítulo
+\ref{cap:exemplos-redes} aplica as quatro em três cenários.
