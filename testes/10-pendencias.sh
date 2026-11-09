@@ -89,11 +89,11 @@ else
   nok "verificador rejeitou syn_guard"; head -15 $W/d.err
 fi
 
-echo "== E. Manual 2, cap. 9: opensnoop | grep como root"
-( timeout -s INT 8 sh -c "opensnoop-libbpf | grep --line-buffered -E '/etc/(shadow|passwd)' > $W/e.out" ) &
-sleep 4; cat /etc/shadow > /dev/null; cat /etc/passwd > /dev/null; wait
-tr -d '\000' < $W/e.out | head -6
-grep -q "/etc/shadow" $W/e.out && ok "opensnoop|grep viu /etc/shadow (root)" || nok "opensnoop|grep viu /etc/shadow (root)"
+echo "== E. Manual 2, cap. 9: opensnoop filtrado por /etc/shadow e /etc/passwd (como root)"
+# sem pipeline dentro de timeout: o SIGINT precisa chegar no opensnoop; o grep roda depois, sobre o arquivo
+cena $W/e.out 1 "cat /etc/shadow > /dev/null; cat /etc/passwd > /dev/null" opensnoop-libbpf
+tr -d '\000' < $W/e.out | grep -E "PID|/etc/(shadow|passwd)" | head -6
+grep -q "/etc/shadow" $W/e.out && ok "opensnoop viu /etc/shadow (root)" || nok "opensnoop viu /etc/shadow (root)"
 
 echo "== F. Manual 2, cap. 9: alerta de finit_module"
 modprobe -r dummy 2>/dev/null
