@@ -24,8 +24,7 @@ O ponto de partida é o \texttt{execsnoop}, que registra cada \texttt{execve} co
 PID, PPID e linha de comando. Em um terminal, deixe-o em execução; em outro, rode
 comandos quaisquer e veja-os aparecer.
 
-% TODO: validar com sudo
-\begin{lstlisting}[language=bash, caption={Execuções de processos com o \texttt{execsnoop} do BCC.}]
+\begin{lstlisting}[language=bash, caption={Execuções de processos com o \texttt{execsnoop-libbpf}.}]
 sudo execsnoop-libbpf
 \end{lstlisting}
 
@@ -41,7 +40,6 @@ Se o objetivo é alertar apenas sobre um arquivo específico, um programa bpftra
 filtra no próprio kernel, reduzindo o volume de eventos. É o mesmo programa do
 Capítulo~\ref{cap:ferramentas-seguranca}; salve-o como \texttt{shadow.bt}:
 
-% TODO: validar com sudo
 \begin{lstlisting}[language=C, caption={\texttt{shadow.bt}: alerta de abertura de \texttt{/etc/shadow}.}]
 tracepoint:syscalls:sys_enter_openat
 /str(args->filename) == "/etc/shadow"/
@@ -55,14 +53,25 @@ tracepoint:syscalls:sys_enter_openat
 \begin{lstlisting}[language=bash, caption={Execução do alerta e geração de um evento de teste.}]
 sudo bpftrace shadow.bt
 # em outro terminal:
-cat /etc/shadow
+head -c1 /etc/shadow
 \end{lstlisting}
 
-Executado por um usuário comum, o \texttt{cat /etc/shadow} falha com ``Permissão
-negada'', mas o alerta deve aparecer mesmo assim: o \textit{tracepoint}
+Executado por um usuário comum, o \texttt{head -c1 /etc/shadow} falha com
+``Permissão negada'', mas o alerta aparece mesmo assim: o \textit{tracepoint}
 \texttt{sys\_enter\_openat} dispara na entrada da chamada de sistema, antes de o
 kernel decidir se o acesso é permitido. Isso é útil, pois tentativas malsucedidas
 também indicam reconhecimento.
+
+Nos testes, a captura foi irregular. Com quatro programas abrindo
+\texttt{/etc/shadow} como usuário comum, o alerta disparou para o \texttt{head} e
+para o \texttt{python3}, mas não para o \texttt{cat} (no Ubuntu 26.04, a versão do
+projeto uutils) nem para um redirecionamento do \texttt{bash}, embora o
+\texttt{strace} mostre que os três chamam o mesmo
+\texttt{openat(AT\_FDCWD, "/etc/shadow", O\_RDONLY...)}. O \texttt{opensnoop}
+também não registrou nenhuma das aberturas na linha filtrada. A causa não foi
+investigada. A consequência prática é que um alerta baseado em um único
+\textit{tracepoint} pode perder eventos, e a ausência de alerta não prova que o
+arquivo não foi acessado.
 
 O ponto de atenção está nos falsos positivos: processos legítimos, como
 \texttt{sshd} e \texttt{login}, leem esses arquivos o tempo todo. Em um uso real,
@@ -82,7 +91,6 @@ Primeiro, uma visão geral: contar as chamadas por processo mostra quem é o mai
 ativo e dá uma linha de base para a detecção de anomalias do
 Capítulo~\ref{cap:deteccao}. O mapa é impresso ao encerrar com \texttt{Ctrl-C}.
 
-% TODO: validar com sudo
 \begin{lstlisting}[language=bash, caption={Contagem de chamadas de sistema por processo.}]
 sudo bpftrace -e 'tracepoint:raw_syscalls:sys_enter { @[comm] = count(); }'
 \end{lstlisting}
@@ -91,7 +99,6 @@ Em seguida, monitore chamadas específicas. O programa abaixo, também do
 Capítulo~\ref{cap:ferramentas-seguranca}, alerta sobre \texttt{ptrace} por
 usuários não privilegiados. Salve-o como \texttt{ptrace.bt}:
 
-% TODO: validar com sudo
 \begin{lstlisting}[language=C, caption={\texttt{ptrace.bt}: uso de \texttt{ptrace} por usuários não root.}]
 tracepoint:syscalls:sys_enter_ptrace
 /uid != 0/
@@ -104,7 +111,6 @@ tracepoint:syscalls:sys_enter_ptrace
 Para gerar um evento de teste, use o \texttt{strace}, que se apoia em
 \texttt{ptrace}:
 
-% TODO: validar com sudo
 \begin{lstlisting}[language=bash, caption={Execução do alerta e geração de um evento de teste.}]
 sudo bpftrace ptrace.bt
 # em outro terminal, como usuário comum:
@@ -137,7 +143,6 @@ critérios que o atacante não controle, como o UID ou o cgroup.
 O \texttt{tcpconnect} registra cada nova conexão TCP de saída com PID, processo,
 endereço e porta de destino:
 
-% TODO: validar com sudo
 \begin{lstlisting}[language=bash, caption={Conexões TCP de saída com o \texttt{tcpconnect}.}]
 sudo tcpconnect-libbpf
 \end{lstlisting}
@@ -146,7 +151,6 @@ Em outro terminal, gere uma conexão para observar o registro. O exemplo usa o
 recurso \texttt{/dev/tcp} do Bash para abrir uma conexão local sem depender de
 outras ferramentas:
 
-% TODO: validar com sudo
 \begin{lstlisting}[language=bash, caption={Geração de uma conexão de teste.}]
 bash -c 'exec 3<>/dev/tcp/127.0.0.1/22'
 \end{lstlisting}
@@ -155,7 +159,6 @@ Para uma visão que não depende do BCC, o \textit{tracepoint}
 \texttt{sys\_enter\_connect} também registra as tentativas, ainda que sem o
 endereço decodificado:
 
-% TODO: validar com sudo
 \begin{lstlisting}[language=bash, caption={Tentativas de conexão com bpftrace.}]
 sudo bpftrace -e 'tracepoint:syscalls:sys_enter_connect {
     printf("%s (pid=%d uid=%d) chamou connect()\n", comm, pid, uid);

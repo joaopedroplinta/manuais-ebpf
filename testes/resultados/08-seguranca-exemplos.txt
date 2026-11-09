@@ -1,17 +1,38 @@
-== 1a. execsnoop-bpfcc
-In file included from /virtual/main.c:16:
-include/linux/fs.h:2428:2: warning: declaration does not declare anything [-Wmissing-declarations]
- 2428 |         struct __filename_head;
-      |         ^~~~~~~~~~~~~~~~~~~~~~
-include/linux/fs.h:2432:15: error: static assertion failed due to requirement 'sizeof(struct filename) % 64 == 0': sizeof(struct filename) % 64 == 0
- 2432 | static_assert(sizeof(struct filename) % 64 == 0);
-      |               ^~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-include/linux/build_bug.h:79:50: note: expanded from macro 'static_assert'
-   79 | #define static_assert(expr, ...) __static_assert(expr, ##__VA_ARGS__, #expr)
-      |                                                  ^~~~
-include/linux/build_bug.h:80:56: note: expanded from macro '__static_assert'
-   80 | #define __static_assert(expr, msg, ...) _Static_assert(expr, msg)
-      |                                                        ^~~~
-include/linux/fs.h:2432:44: note: expression evaluates to '40 == 0'
- 2432 | static_assert(sizeof(struct filename) % 64 == 0);
-== 1b. opensnoop-bpfcc filtrando /etc/shadow e /etc/passwd
+== 1a. execsnoop-libbpf (carga: ls e id como pinguas)
+PCOMM            PID    PPID   RET ARGS
+grep             2426225 2425924   0 /usr/bin/grep -qE Attached|PID|PCOMM|Tracing /tmp/m2-1a.out 
+grep             2426384 2425924   0 /usr/bin/grep -qE Attached|PID|PCOMM|Tracing /tmp/m2-1a.out 
+== 1b. opensnoop-libbpf filtrando /etc/shadow e /etc/passwd (carga: cat, head, bash e python como pinguas)
+PID    COMM              FD ERR PATH
+== 1c. shadow.bt (carga: cat, head, bash e python como pinguas)
+Attached 1 probe
+[ALERTA] head (pid=2426636 uid=1000) tentou abrir /etc/shadow
+[ALERTA] python3 (pid=2426638 uid=1000) tentou abrir /etc/shadow
+== 2a. contagem de syscalls por processo
+Attached 1 probe
+@[nautilus]: 1
+@[sd-close]: 2
+@[WebRTC_Signalin]: 2
+@[WebRTC_W_and_N]: 2
+@[C2 CompilerThre]: 2
+@[C1 CompilerThre]: 2
+@[VM Periodic Tas]: 2
+== 2b. ptrace.bt (carga: strace como pinguas)
+Attached 1 probe
+[ALERTA] ptrace por strace (pid=2426855 uid=1000) -> pid alvo: 2426855
+[ALERTA] ptrace por strace (pid=2426856 uid=1000) -> pid alvo: 0
+[ALERTA] ptrace por strace (pid=2426855 uid=1000) -> pid alvo: 2426856
+[ALERTA] ptrace por strace (pid=2426855 uid=1000) -> pid alvo: 2426856
+== 2c. finit_module (so o alerta; nenhum modulo e carregado)
+Attached 1 probe
+== 3a. tcpconnect-libbpf (carga: conexao a 127.0.0.1:22 como pinguas)
+bash: connect: Conexão recusada
+bash: linha 1: /dev/tcp/127.0.0.1/22: Conexão recusada
+PID    COMM             IP SADDR            DADDR            DPORT
+2427509 bash             4  127.0.0.1        127.0.0.1        22   
+== 3b. sys_enter_connect com bpftrace (carga: conexao a 127.0.0.1:22 como pinguas)
+bash: connect: Conexão recusada
+bash: linha 1: /dev/tcp/127.0.0.1/22: Conexão recusada
+Attached 1 probe
+bash (pid=2427592 uid=1000) chamou connect()
+== fim
