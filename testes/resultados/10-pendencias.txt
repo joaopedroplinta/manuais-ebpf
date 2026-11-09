@@ -1,0 +1,35 @@
+== laboratorio netns pod1 + veth
+PASS  lab: curl pod -> host:8099
+== A. histograma de tamanho de pacotes (cap. 11, lst:ex-pkt-hist)
+Attached 1 probe
+
+
+@len:
+[32, 64)               1 |@@@                                                 |
+[64, 128)              9 |@@@@@@@@@@@@@@@@@@@@@@@@@@@                         |
+[128, 256)            17 |@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@|
+
+PASS  histograma netif_receive_skb
+== B. netem + retransmissoes (cap. 11, lst:ex-retrans)
+Attached 1 probe
+swapper/5 sport=53368 dport=8099
+PASS  retransmissoes observadas
+== C. firewall de saida em TC (cap. 7) no veth-pod, regra para a porta 8099
+PASS  verificador aceitou tc_egress_fw (tc filter add)
+filter protocol all pref 49152 bpf chain 0 
+filter protocol all pref 49152 bpf chain 0 handle 0x1 tc_egress_fw.bpf.o:[tc] direct-action not_in_hw id 1676 name tc_egress_fw tag c5e44cb8b7ca78ac jited 
+PASS  curl bloqueado pelo tc_egress_fw
+-- contador da regra:
+[{"key":8099,"value":5}]
+PASS  curl volta apos remover a regra
+== D. limitador de SYN em XDP (cap. 7): so a aceitacao pelo verificador
+PASS  verificador aceitou syn_guard (bpftool prog loadall)
+1683: xdp  name syn_guard  tag 344b97654d24cad5  gpl
+	loaded_at 2026-11-09T02:19:23-0300  uid 0
+== E. Manual 2, cap. 9: opensnoop filtrado por /etc/shadow e /etc/passwd (como root)
+PID    COMM              FD ERR PATH
+FAIL  opensnoop viu /etc/shadow (root)
+== F. Manual 2, cap. 9: alerta de finit_module e init_module (modprobe dummy, modulo .ko.zst)
+Attached 2 probes
+FAIL  alerta de carga de modulo
+== RESUMO: 7 PASS, 2 FAIL

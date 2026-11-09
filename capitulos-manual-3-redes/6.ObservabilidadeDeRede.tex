@@ -31,7 +31,7 @@ e oferecendo resolução temporal superior à do intervalo de coleta do \texttt{
 (GODARD; Sysstat Contributors, 2024). O exemplo a seguir demonstra um programa XDP
 que acumula contadores de pacotes e bytes por interface de entrada:
 
-\begin{lstlisting}[caption={Listing 6.1 – Contadores de pacotes e bytes por interface com XDP.}, label=lst:obs-iface]
+\begin{lstlisting}[caption={Contadores de pacotes e bytes por interface com XDP.}, label=lst:obs-iface]
 #include <linux/bpf.h>
 #include <bpf/bpf_helpers.h>
 
@@ -75,7 +75,7 @@ tamanho de pacote ou contadores por par de endereços sem gerar tráfego de capt
 adicional (CASSAGNES et al., 2020). O \texttt{bpftrace} permite realizar essa inspeção
 interativamente sem escrever um programa eBPF completo:
 
-\begin{lstlisting}[caption={Listing 6.2 – Histograma de tamanho de pacotes TCP com bpftrace.}, label=lst:obs-pkt-hist]
+\begin{lstlisting}[caption={Histograma de tamanho de pacotes TCP com bpftrace.}, label=lst:obs-pkt-hist]
 sudo bpftrace -e '
 tracepoint:net:netif_receive_skb
 {
@@ -94,7 +94,7 @@ Documentation, 2024). A ferramenta \texttt{tcpconnect-bpfcc} do BCC (IO Visor
 Project, s.d.) ilustra esse padrão, exibindo em tempo real cada nova conexão TCP com
 PID, comando, endereço e porta:
 
-\begin{lstlisting}[caption={Listing 6.3 – Monitoramento de novas conexões TCP com tcpconnect-bpfcc.}, label=lst:obs-tcpconnect]
+\begin{lstlisting}[caption={Monitoramento de novas conexões TCP com tcpconnect-bpfcc.}, label=lst:obs-tcpconnect]
 sudo tcpconnect-bpfcc -t
 \end{lstlisting}
 
@@ -122,7 +122,7 @@ anexados ao tracepoint \texttt{tcp:tcp\_probe} ou à kprobe \texttt{tcp\_rcv\_es
 (Linux Kernel Documentation, 2024). O exemplo a seguir utiliza o \texttt{bpftrace} para
 construir um histograma de RTT por endereço de destino:
 
-\begin{lstlisting}[caption={Listing 6.4 – Histograma de RTT TCP passivo com bpftrace.}, label=lst:obs-rtt]
+\begin{lstlisting}[caption={Histograma de RTT TCP passivo com bpftrace.}, label=lst:obs-rtt]
 sudo bpftrace -e '
 tracepoint:tcp:tcp_probe
 {
@@ -150,7 +150,7 @@ Kernel Documentation, 2024). Essa métrica é particularmente relevante em ambie
 com \textit{policing} ativo, onde o enfileiramento pode introduzir latência adicional
 não prevista pelas funções de rede (GREGG, 2019).
 
-\begin{lstlisting}[caption={Listing 6.5 – Medição de latência de enfileiramento com timestamp BPF.}, label=lst:obs-qdelay]
+\begin{lstlisting}[caption={Medição de latência de enfileiramento com timestamp BPF.}, label=lst:obs-qdelay]
 #include <linux/bpf.h>
 #include <linux/pkt_cls.h>
 #include <bpf/bpf_helpers.h>
@@ -207,7 +207,7 @@ variação do contador entre leituras consecutivas (Linux Kernel Documentation, 
 O \texttt{bpftrace} permite verificar rapidamente o \textit{throughput} de entrada de
 uma interface sem carregar um programa eBPF dedicado:
 
-\begin{lstlisting}[caption={Listing 6.6 – Throughput de entrada por interface com bpftrace.}, label=lst:obs-throughput-iface]
+\begin{lstlisting}[caption={Throughput de entrada por interface com bpftrace.}, label=lst:obs-throughput-iface]
 sudo bpftrace -e '
 tracepoint:net:netif_receive_skb
 /str(args->name) == "eth0"/
@@ -232,7 +232,7 @@ virtualizada, obtido via \texttt{bpf\_skb\_cgroup\_id} no TC \textit{egress}, pe
 construir séries temporais de \textit{throughput} por função sem instrumentar as
 próprias funções (VENÂNCIO et al., 2021):
 
-\begin{lstlisting}[caption={Listing 6.7 – Throughput por cgroup no TC egress.}, label=lst:obs-throughput-cgroup]
+\begin{lstlisting}[caption={Throughput por cgroup no TC egress.}, label=lst:obs-throughput-cgroup]
 #include <linux/bpf.h>
 #include <linux/pkt_cls.h>
 #include <bpf/bpf_helpers.h>
@@ -288,7 +288,7 @@ ou atualizam entradas nessa tabela a cada pacote; tracepoints de \texttt{tcp\_cl
 \texttt{udp\_destroy\_sock} removem a entrada ao encerrar o fluxo e emitem o registro
 final via \texttt{BPF\_MAP\_TYPE\_RINGBUF}:
 
-\begin{lstlisting}[caption={Listing 6.8 – Estruturas de chave e valor para tabela de fluxos ativos.}, label=lst:obs-flow-structs]
+\begin{lstlisting}[caption={Estruturas de chave e valor para tabela de fluxos ativos.}, label=lst:obs-flow-structs]
 #include <linux/bpf.h>
 #include <bpf/bpf_helpers.h>
 
@@ -325,7 +325,7 @@ para novos fluxos (Linux Kernel Documentation, 2024). A aplicação em espaço d
 usuário consome esses eventos e os encaminha a um coletor compatível com o formato
 IPFIX ou ao Prometheus para análise histórica (GREGG, 2020):
 
-\begin{lstlisting}[caption={Listing 6.9 – Emissão de registro de fluxo encerrado via ringbuf.}, label=lst:obs-flow-close]
+\begin{lstlisting}[caption={Emissão de registro de fluxo encerrado via ringbuf.}, label=lst:obs-flow-close]
 #include <linux/bpf.h>
 #include <bpf/bpf_helpers.h>
 
@@ -371,7 +371,7 @@ Para investigação interativa de fluxos ativos sem carregar um programa eBPF de
 o \texttt{bpftrace} oferece acesso direto aos tracepoints de socket (bpftrace Contributors,
 s.d.):
 
-\begin{lstlisting}[caption={Listing 6.10 – Listagem de novas conexões TCP com origem e destino via bpftrace.}, label=lst:obs-flow-bpftrace]
+\begin{lstlisting}[caption={Listagem de novas conexões TCP com origem e destino via bpftrace.}, label=lst:obs-flow-bpftrace]
 sudo bpftrace -e '
 tracepoint:tcp:tcp_connect
 {

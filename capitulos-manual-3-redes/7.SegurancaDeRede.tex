@@ -17,9 +17,12 @@ dependem de carregar o programa no kernel, o que exige \textit{root}. O filtro X
 \texttt{fw\_xdp} foi carregado e testado pelo script
 \texttt{testes/09-redes-exemplos.sh} (capítulo \ref{cap:exemplos-redes}): o \texttt{ping}
 passou com a lista de bloqueio vazia, foi bloqueado ao inserir a origem e voltou ao
-remover a regra. O firewall de saída em TC e o limitador de SYN foram apenas
-compilados, e seus blocos trazem a marca \texttt{TODO: validar com sudo} no
-código-fonte do capítulo.
+remover a regra. O firewall de saída em TC foi carregado no \texttt{veth-pod} pelo
+script \texttt{testes/10-pendencias.sh}: o verificador o aceitou, ele bloqueou o
+\texttt{curl} para a porta 8099 (o contador da regra chegou a 5) e o tráfego voltou ao
+remover a regra. O limitador de SYN teve apenas o carregamento aceito pelo
+verificador, sem tráfego de teste, e o bloco de contagem de \textit{sockets} em
+\texttt{SYN\_RECV} ainda traz a marca \texttt{TODO: validar com sudo} no código-fonte.
 
 % ----------------------------------------------------------------
 \section{Filtragem de pacotes}
@@ -53,7 +56,7 @@ e também verifica se a porta de destino TCP ou UDP está proibida. Os dois mapa
 preenchidos pelo espaço de usuário; um terceiro mapa, \texttt{PERCPU\_ARRAY}, conta
 pacotes aceitos e descartados.
 
-\begin{lstlisting}[caption={Listing 7.1 – Filtro XDP por IP de origem e porta de destino (fw\_xdp.bpf.c).}, label=lst:seg-fw-xdp]
+\begin{lstlisting}[caption={Filtro XDP por IP de origem e porta de destino (fw\_xdp.bpf.c).}, label=lst:seg-fw-xdp]
 #include <linux/bpf.h>
 #include <linux/if_ether.h>
 #include <linux/ip.h>
@@ -144,7 +147,7 @@ legítimo que o programa não sabe interpretar --- uma decisão de política, n�
 
 Compilar o objeto não exige privilégio:
 
-\begin{lstlisting}[language=bash, caption={Listing 7.2 – Compilação do programa XDP.}, label=lst:seg-compila]
+\begin{lstlisting}[language=bash, caption={Compilação do programa XDP.}, label=lst:seg-compila]
 clang -target bpf -O2 -g -Wall -I/usr/include/x86_64-linux-gnu \
       -c fw_xdp.bpf.c -o fw_xdp.bpf.o
 \end{lstlisting}
@@ -169,7 +172,7 @@ mapas no sistema de arquivos BPF; o \texttt{bpftool net attach} liga o programa 
 interface. O modo \texttt{xdpgeneric} funciona em qualquer interface, inclusive
 \texttt{veth} e máquinas virtuais (seção \ref{sec:xdp-modos}):
 
-\begin{lstlisting}[language=bash, caption={Listing 7.3 – Carga e anexação do firewall XDP (requer root).}, label=lst:seg-attach]
+\begin{lstlisting}[language=bash, caption={Carga e anexação do firewall XDP (requer root).}, label=lst:seg-attach]
 sudo mkdir -p /sys/fs/bpf/fw
 sudo bpftool prog loadall fw_xdp.bpf.o /sys/fs/bpf/fw \
      pinmaps /sys/fs/bpf/fw/maps
@@ -187,7 +190,7 @@ o endereço em bytes, na ordem em que aparece no pacote: \texttt{10.0.0.2} corre
 a \texttt{0a 00 00 02}. O valor é um inteiro de 32 bits qualquer (apenas a presença da
 chave importa), escrito em \textit{little-endian} no x86:
 
-\begin{lstlisting}[language=bash, caption={Listing 7.4 – Edição das regras do firewall por meio dos mapas.}, label=lst:seg-regras]
+\begin{lstlisting}[language=bash, caption={Edição das regras do firewall por meio dos mapas.}, label=lst:seg-regras]
 # bloquear a origem 10.0.0.2
 sudo bpftool map update pinned /sys/fs/bpf/fw/maps/blocklist \
      key hex 0a 00 00 02 value hex 01 00 00 00
@@ -216,7 +219,7 @@ Para desfazer o experimento, desanexe o programa da interface e remova os arquiv
 fixados. Sem a remoção do \textit{pin}, o programa e os mapas permanecem na memória
 do kernel mesmo depois que nenhum processo os referencia.
 
-\begin{lstlisting}[language=bash, caption={Listing 7.5 – Desanexação e limpeza.}, label=lst:seg-detach]
+\begin{lstlisting}[language=bash, caption={Desanexação e limpeza.}, label=lst:seg-detach]
 sudo bpftool net detach xdpgeneric dev eth0
 sudo rm -r /sys/fs/bpf/fw
 \end{lstlisting}
@@ -230,7 +233,7 @@ programa abaixo descarta segmentos TCP cujo destino seja uma porta proibida, com
 uma política de saída restritiva, útil contra \textit{malware} que tenta abrir
 conexões para portas incomuns.
 
-\begin{lstlisting}[caption={Listing 7.6 – Firewall de saída em TC (tc\_egress\_fw.bpf.c).}, label=lst:seg-tc-egress]
+\begin{lstlisting}[caption={Firewall de saída em TC (tc\_egress\_fw.bpf.c).}, label=lst:seg-tc-egress]
 #include <linux/bpf.h>
 #include <linux/if_ether.h>
 #include <linux/ip.h>
@@ -282,8 +285,7 @@ A anexação usa a \textit{qdisc} \texttt{clsact}, como no Listing
 partir de versões recentes do iproute2; em versões antigas, informe a seção
 explicitamente com \texttt{sec tc}.
 
-\begin{lstlisting}[language=bash, caption={Listing 7.7 – Anexação do firewall de saída e inclusão de uma regra.}, label=lst:seg-tc-attach]
-# TODO: validar com sudo
+\begin{lstlisting}[language=bash, caption={Anexação do firewall de saída e inclusão de uma regra.}, label=lst:seg-tc-attach]
 sudo tc qdisc add dev eth0 clsact
 sudo tc filter add dev eth0 egress bpf da obj tc_egress_fw.bpf.o sec tc
 tc filter show dev eth0 egress
@@ -322,7 +324,7 @@ com milhões de endereços forjados --- uma preocupação concreta, já que o XD
 coleta automática de entradas antigas em um \texttt{HASH} comum
 (capítulo \ref{cap:xdp}).
 
-\begin{lstlisting}[caption={Listing 7.8 – Limitação de SYN por origem em XDP (syn\_guard.bpf.c).}, label=lst:seg-syn]
+\begin{lstlisting}[caption={Limitação de SYN por origem em XDP (syn\_guard.bpf.c).}, label=lst:seg-syn]
 #include <linux/bpf.h>
 #include <linux/if_ether.h>
 #include <linux/ip.h>
@@ -427,8 +429,8 @@ política nova. Para uma verificação rápida e independente do programa, o
 (capítulo \ref{cap:obs-rede}); a contagem por origem aparece ao interromper com
 \texttt{Ctrl-C}:
 
-\begin{lstlisting}[language=bash, caption={Listing 7.9 – Contagem de sockets em SYN\_RECV por porta local com bpftrace.}, label=lst:seg-bt-syn]
-# TODO: validar com sudo
+% TODO: validar com sudo
+\begin{lstlisting}[language=bash, caption={Contagem de sockets em SYN\_RECV por porta local com bpftrace.}, label=lst:seg-bt-syn]
 sudo bpftrace -e 'tracepoint:sock:inet_sock_set_state /args->newstate == 3/ { @syn_recv[args->sport] = count(); }'
 \end{lstlisting}
 

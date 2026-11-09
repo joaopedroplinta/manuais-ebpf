@@ -26,6 +26,7 @@ Cada comando roda por poucos segundos e é encerrado com `SIGINT`. Os scripts cr
 | `06-painel-grafana.sh` | sobe o painel de exemplo para tirar print; repete o USDT | 6, 7 | arquivos dos scripts 03 e 04 em `/tmp` |
 | `07-exemplos-praticos.sh` | cenários do cap. 8: `execsnoop`, `opensnoop -p`, `syscount -p`, `tcplife` (porta 8099), USDT | 8 | `libbpf-tools`, `curl`, `python3.14` |
 | `08-seguranca-exemplos.sh` | **Manual 2** (segurança): `execsnoop`, `opensnoop`, `tcpconnect` e programas bpftrace do cap. 9 | 9 (Manual 2) | `libbpf-tools`, `bpftrace`, `strace` |
+| `10-pendencias.sh` | **Manuais 2 e 3**: histograma `netif_receive_skb`, `netem` + retransmissões, `tc_egress_fw`, `syn_guard` (só verificador), `opensnoop \| grep` como root, alerta de `finit_module` | 7, 11 (Manual 3); 9 (Manual 2) | `clang`, `bpftool`, `bpftrace`, `libbpf-tools`, módulos `sch_netem` e `dummy` |
 
 O `08` pertence ao Manual 2, não ao Manual 1. Dois blocos do cap. 9 seguem marcados com `% TODO: validar com sudo`: o `opensnoop` filtrado por `grep`, que não registrou as aberturas, e o alerta de `finit_module`, em que só a sonda foi anexada.
 

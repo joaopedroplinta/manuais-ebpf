@@ -128,6 +128,12 @@ sudo bpftrace -e 'tracepoint:syscalls:sys_enter_finit_module {
 }'
 \end{lstlisting}
 
+Nos testes, esse alerta não disparou quando o módulo \texttt{dummy} foi carregado
+com \texttt{modprobe}, nem mesmo ao vigiar também o \texttt{init\_module}, a outra
+chamada de sistema usada para carregar módulos. A causa não foi investigada, e o
+resultado se soma à captura irregular observada na seção anterior: um alerta
+baseado em um único \textit{tracepoint} pode perder eventos.
+
 Como em qualquer filtro baseado em nomes de processo, \texttt{comm} é controlado
 pelo próprio processo e pode ser falsificado. Para decisões de bloqueio, prefira
 critérios que o atacante não controle, como o UID ou o cgroup.
