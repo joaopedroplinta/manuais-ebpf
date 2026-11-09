@@ -52,8 +52,8 @@ exemplo, \texttt{tcpconnect-bpfcc}); em outras distribuições, o nome é simple
 Todas exigem privilégio de administrador. Os exemplos abaixo usam o nome com sufixo
 do Ubuntu:
 
-\begin{lstlisting}[language=bash, caption={Listing 10.1 – Ferramentas de rede do BCC.}, label=lst:ferr-bcc]
-# TODO: validar com sudo
+% TODO: validar com sudo
+\begin{lstlisting}[language=bash, caption={Ferramentas de rede do BCC.}, label=lst:ferr-bcc]
 sudo tcpconnect-bpfcc            # novas conexoes de saida
 sudo tcpconnect-bpfcc -p 1234    # apenas o PID 1234
 sudo tcpaccept-bpfcc             # conexoes aceitas por servidores locais
@@ -86,8 +86,8 @@ Todos os \textit{one-liners} abaixo usam pontos de rastreamento estáveis do ker
 (\textit{tracepoints}) ou funções do TCP; os mesmos pontos já apareceram no capítulo
 \ref{cap:obs-rede}:
 
-\begin{lstlisting}[language=bash, caption={Listing 10.2 – One-liners de rede em bpftrace.}, label=lst:ferr-bpftrace]
-# TODO: validar com sudo
+% TODO: validar com sudo
+\begin{lstlisting}[language=bash, caption={One-liners de rede em bpftrace.}, label=lst:ferr-bpftrace]
 # quem esta enviando dados por TCP (bytes por processo)
 sudo bpftrace -e 'kprobe:tcp_sendmsg { @bytes[comm] = sum(arg2); }'
 
@@ -110,8 +110,8 @@ na rodada de testes do Manual~1 (\texttt{tcp\_sendmsg sum}, \texttt{tcp\_retrans
 novo neste manual e depende de o \textit{tracepoint} existir no kernel em uso.
 Para conferir os pontos disponíveis, a listagem faz parte do próprio \textit{bpftrace}:
 
-\begin{lstlisting}[language=bash, caption={Listing 10.3 – Descoberta de pontos de rastreamento de rede.}, label=lst:ferr-bpftrace-list]
-# TODO: validar com sudo
+% TODO: validar com sudo
+\begin{lstlisting}[language=bash, caption={Descoberta de pontos de rastreamento de rede.}, label=lst:ferr-bpftrace-list]
 sudo bpftrace -l 'tracepoint:net:*'
 sudo bpftrace -l 'tracepoint:tcp:*'
 sudo bpftrace -l 'kprobe:tcp_*' | head
@@ -135,8 +135,8 @@ O \textit{bpftool} é a ferramenta oficial de inspeção e administração do su
 BPF, mantida junto ao código do kernel \cite{linuxkernel2024}. Para rede, três
 subcomandos concentram o uso: \texttt{prog}, \texttt{map} e \texttt{net}.
 
-\begin{lstlisting}[language=bash, caption={Listing 10.4 – Inspeção de programas, mapas e ganchos de rede com bpftool.}, label=lst:ferr-bpftool]
-# TODO: validar com sudo
+% TODO: validar com sudo
+\begin{lstlisting}[language=bash, caption={Inspeção de programas, mapas e ganchos de rede com bpftool.}, label=lst:ferr-bpftool]
 sudo bpftool prog show                 # todos os programas carregados
 sudo bpftool prog show type xdp        # apenas programas XDP
 sudo bpftool prog dump xlated id 42    # codigo apos o verificador
@@ -164,7 +164,7 @@ O \texttt{bpftool} também administra o ciclo de vida: carregar (\texttt{prog lo
 (\texttt{map update}, \texttt{map delete}), como no Listing \ref{lst:seg-regras}. E,
 com \texttt{btf dump} e \texttt{gen skeleton}, ele prepara o terreno para a \textit{libbpf}:
 
-\begin{lstlisting}[language=bash, caption={Listing 10.5 – Geração de vmlinux.h e do esqueleto (skeleton) com bpftool.}, label=lst:ferr-bpftool-gen]
+\begin{lstlisting}[language=bash, caption={Geração de vmlinux.h e do esqueleto (skeleton) com bpftool.}, label=lst:ferr-bpftool-gen]
 bpftool btf dump file /sys/kernel/btf/vmlinux format c > vmlinux.h
 bpftool gen skeleton fw_xdp.bpf.o > fw_xdp.skel.h
 \end{lstlisting}
@@ -186,7 +186,7 @@ no momento do carregamento, o que dispensa os cabeçalhos do kernel instalados n
 versões \texttt{-libbpf} das ferramentas terem funcionado onde as de Python
 falharam. Elas são empacotadas em Debian e Ubuntu como \texttt{libbpf-tools}:
 
-\begin{lstlisting}[language=bash, caption={Listing 10.6 – Ferramentas de rede da libbpf-tools.}, label=lst:ferr-libbpf-tools]
+\begin{lstlisting}[language=bash, caption={Ferramentas de rede da libbpf-tools.}, label=lst:ferr-libbpf-tools]
 sudo tcpconnect-libbpf
 sudo tcplife-libbpf
 \end{lstlisting}
@@ -198,7 +198,7 @@ carregador a seguir completa o programa do Listing \ref{lst:seg-fw-xdp}: carrega
 objeto, preenche opcionalmente a lista de bloqueio com um IP recebido na linha de
 comando, anexa o XDP à interface e imprime os contadores a cada segundo.
 
-\begin{lstlisting}[caption={Listing 10.7 – Carregador libbpf para o firewall XDP (fw\_loader.c).}, label=lst:ferr-libbpf-loader]
+\begin{lstlisting}[caption={Carregador libbpf para o firewall XDP (fw\_loader.c).}, label=lst:ferr-libbpf-loader]
 #include <stdio.h>
 #include <stdlib.h>
 #include <unistd.h>
@@ -265,7 +265,7 @@ int main(int argc, char **argv)
 
 A compilação e a execução seguem:
 
-\begin{lstlisting}[language=bash, caption={Listing 10.8 – Compilação e execução do carregador.}, label=lst:ferr-libbpf-build]
+\begin{lstlisting}[language=bash, caption={Compilação e execução do carregador.}, label=lst:ferr-libbpf-build]
 clang -target bpf -O2 -g -I/usr/include/x86_64-linux-gnu \
       -c fw_xdp.bpf.c -o fw_xdp.bpf.o
 bpftool gen skeleton fw_xdp.bpf.o > fw_xdp.skel.h

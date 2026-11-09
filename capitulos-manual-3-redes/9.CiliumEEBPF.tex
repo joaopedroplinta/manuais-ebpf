@@ -41,8 +41,7 @@ A arquitetura do Cilium tem poucas peças \cite{ciliumdocs}:
 A forma mais direta de instalar o Cilium em um cluster novo é a CLI do projeto. O
 bloco a seguir é um \textbf{comando de cluster, não executado}:
 
-\begin{lstlisting}[language=bash, caption={Listing 9.1 – Instalação e verificação do Cilium com a CLI (comando de cluster, não executado).}, label=lst:cilium-install]
-# TODO: validar em um cluster Kubernetes
+\begin{lstlisting}[language=bash, caption={Instalação e verificação do Cilium com a CLI (comando de cluster, não executado).}, label=lst:cilium-install]
 cilium install
 cilium status --wait
 \end{lstlisting}
@@ -53,8 +52,7 @@ funcionalidades por parâmetros. Os valores abaixo ativam a substituição do
 \texttt{kubeProxyReplacement} exige que o cluster tenha sido criado sem o
 \texttt{kube-proxy} ou que ele seja removido:
 
-\begin{lstlisting}[language=bash, caption={Listing 9.2 – Instalação via Helm com Hubble e substituição do kube-proxy (comando de cluster, não executado).}, label=lst:cilium-helm]
-# TODO: validar em um cluster Kubernetes
+\begin{lstlisting}[language=bash, caption={Instalação via Helm com Hubble e substituição do kube-proxy (comando de cluster, não executado).}, label=lst:cilium-helm]
 helm repo add cilium https://helm.cilium.io/
 helm install cilium cilium/cilium --namespace kube-system \
      --set kubeProxyReplacement=true \
@@ -75,8 +73,7 @@ comandos a seguir são \textbf{executáveis em um nó} (com privilégio de admin
 mas só produzem resultado onde o Cilium estiver instalado; a saída, portanto, não é
 reproduzida:
 
-\begin{lstlisting}[language=bash, caption={Listing 9.3 – Inspeção dos programas do Cilium em um nó com bpftool (requer root em um nó com Cilium).}, label=lst:cilium-bpftool]
-# TODO: validar em um no com Cilium
+\begin{lstlisting}[language=bash, caption={Inspeção dos programas do Cilium em um nó com bpftool (requer root em um nó com Cilium).}, label=lst:cilium-bpftool]
 sudo bpftool prog show | grep -i cil
 sudo bpftool net show
 sudo bpftool map show | head
@@ -109,7 +106,7 @@ O manifesto a seguir é um \textbf{exemplo de manifesto}, \textbf{não aplicado}
 equivale ao Listing \ref{lst:k8s-netpol}, mas acrescenta uma regra de camada 7:
 somente requisições \texttt{GET} em caminhos que começam por \texttt{/api/}.
 
-\begin{lstlisting}[caption={Listing 9.4 – CiliumNetworkPolicy com regra HTTP na camada 7 (exemplo de manifesto).}, label=lst:cilium-cnp]
+\begin{lstlisting}[caption={CiliumNetworkPolicy com regra HTTP na camada 7 (exemplo de manifesto).}, label=lst:cilium-cnp]
 apiVersion: cilium.io/v2
 kind: CiliumNetworkPolicy
 metadata:
@@ -145,7 +142,7 @@ Também é possível controlar a \textbf{saída} (\textit{egress}) por nome de d
 manter listas de IP. O Cilium resolve essa regra observando as respostas DNS do próprio
 \textit{pod} \cite{ciliumdocs}:
 
-\begin{lstlisting}[caption={Listing 9.5 – Política de saída por nome de domínio (exemplo de manifesto).}, label=lst:cilium-fqdn]
+\begin{lstlisting}[caption={Política de saída por nome de domínio (exemplo de manifesto).}, label=lst:cilium-fqdn]
 apiVersion: cilium.io/v2
 kind: CiliumNetworkPolicy
 metadata:
@@ -182,8 +179,7 @@ informa ao Cilium quais endereços correspondem ao nome. O domínio
 
 Aplicar e listar os recursos usa o \texttt{kubectl}:
 
-\begin{lstlisting}[language=bash, caption={Listing 9.6 – Aplicação das políticas do Cilium (comando de cluster, não executado).}, label=lst:cilium-apply]
-# TODO: validar em um cluster Kubernetes
+\begin{lstlisting}[language=bash, caption={Aplicação das políticas do Cilium (comando de cluster, não executado).}, label=lst:cilium-apply]
 kubectl apply -f api-somente-get.yaml
 kubectl get cnp -n loja
 \end{lstlisting}
@@ -205,8 +201,7 @@ a CLI \texttt{hubble} e a interface web (Hubble UI) consomem essa API
 \cite{hubbledocs}. O bloco a seguir ativa e usa o Hubble. É um \textbf{comando de
 cluster, não executado}:
 
-\begin{lstlisting}[language=bash, caption={Listing 9.7 – Ativação e consulta de fluxos com o Hubble (comando de cluster, não executado).}, label=lst:hubble-observe]
-# TODO: validar em um cluster Kubernetes
+\begin{lstlisting}[language=bash, caption={Ativação e consulta de fluxos com o Hubble (comando de cluster, não executado).}, label=lst:hubble-observe]
 cilium hubble enable --ui
 cilium hubble port-forward &
 
@@ -253,8 +248,7 @@ A ativação da criptografia com WireGuard é feita na instalação (comando de 
 \textbf{não executado}; os nomes dos parâmetros devem ser conferidos na documentação
 da versão):
 
-\begin{lstlisting}[language=bash, caption={Listing 9.8 – Ativação da criptografia transparente com WireGuard (comando de cluster, não executado).}, label=lst:cilium-wg]
-# TODO: validar em um cluster Kubernetes
+\begin{lstlisting}[language=bash, caption={Ativação da criptografia transparente com WireGuard (comando de cluster, não executado).}, label=lst:cilium-wg]
 cilium install --set encryption.enabled=true --set encryption.type=wireguard
 cilium status
 \end{lstlisting}

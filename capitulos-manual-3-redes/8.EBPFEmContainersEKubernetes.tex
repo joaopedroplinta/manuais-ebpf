@@ -35,8 +35,7 @@ chamada \texttt{eth0}) e a outra permanece no \textit{namespace} do \textit{host
 Esse mecanismo pode ser reproduzido à mão, sem Docker nem Kubernetes. O bloco a seguir
 é \textbf{executável} e é a base do laboratório do capítulo \ref{cap:exemplos-redes}:
 
-\begin{lstlisting}[language=bash, caption={Listing 8.1 – Emulação de um contêiner com network namespace e par veth (executável, requer root).}, label=lst:k8s-veth]
-# TODO: validar com sudo
+\begin{lstlisting}[language=bash, caption={Emulação de um contêiner com network namespace e par veth (executável, requer root).}, label=lst:k8s-veth]
 sudo ip netns add pod1
 sudo ip link add veth-host type veth peer name veth-pod
 sudo ip link set veth-pod netns pod1
@@ -127,8 +126,7 @@ binários dos plugins em \texttt{/opt/cni/bin/}. Os comandos a seguir apenas
 \textbf{inspecionam} um nó; eles são seguros, mas só produzem resultado em um nó
 Kubernetes real, portanto \textbf{não foram executados} nesta máquina:
 
-\begin{lstlisting}[language=bash, caption={Listing 8.2 – Inspeção da configuração CNI em um nó (comando de cluster, não executado).}, label=lst:k8s-cni-inspect]
-# TODO: validar em um no Kubernetes
+\begin{lstlisting}[language=bash, caption={Inspeção da configuração CNI em um nó (comando de cluster, não executado).}, label=lst:k8s-cni-inspect]
 ls /etc/cni/net.d/
 cat /etc/cni/net.d/*.conf*
 ls /opt/cni/bin/
@@ -162,7 +160,7 @@ O manifesto a seguir é um \textbf{exemplo de manifesto}, \textbf{não aplicado 
 cluster}. Ele permite que apenas \textit{pods} com o rótulo \texttt{app: web} acessem
 o banco de dados na porta 5432:
 
-\begin{lstlisting}[caption={Listing 8.3 – NetworkPolicy que restringe o acesso ao banco de dados (exemplo de manifesto).}, label=lst:k8s-netpol]
+\begin{lstlisting}[caption={NetworkPolicy que restringe o acesso ao banco de dados (exemplo de manifesto).}, label=lst:k8s-netpol]
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
 metadata:
@@ -189,7 +187,7 @@ necessário em seguida. A política vazia abaixo seleciona todos os \textit{pods
 \textit{namespace} e, por não listar nenhuma regra de entrada, nega todo o tráfego
 recebido:
 
-\begin{lstlisting}[caption={Listing 8.4 – Negação padrão de entrada em um namespace (exemplo de manifesto).}, label=lst:k8s-deny]
+\begin{lstlisting}[caption={Negação padrão de entrada em um namespace (exemplo de manifesto).}, label=lst:k8s-deny]
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
 metadata:
@@ -214,8 +212,7 @@ endereços.
 
 Aplicar e consultar as políticas em um cluster faz-se com o \texttt{kubectl}:
 
-\begin{lstlisting}[language=bash, caption={Listing 8.5 – Aplicação e consulta de políticas com kubectl (comando de cluster, não executado).}, label=lst:k8s-kubectl-netpol]
-# TODO: validar em um cluster Kubernetes
+\begin{lstlisting}[language=bash, caption={Aplicação e consulta de políticas com kubectl (comando de cluster, não executado).}, label=lst:k8s-kubectl-netpol]
 kubectl apply -f db-permite-web.yaml
 kubectl get networkpolicy -n loja
 kubectl describe networkpolicy db-permite-web -n loja
@@ -272,7 +269,7 @@ O programa de exemplo abaixo ilustra o formato desse tipo de gancho. Ele
 consulta mapa de serviços, balanceamento nem trata erros. Foi verificado apenas
 quanto à compilação.
 
-\begin{lstlisting}[caption={Listing 8.6 – Esboço de redirecionamento no gancho cgroup/connect4 (didático).}, label=lst:k8s-connect4]
+\begin{lstlisting}[caption={Esboço de redirecionamento no gancho cgroup/connect4 (didático).}, label=lst:k8s-connect4]
 #include <linux/bpf.h>
 #include <bpf/bpf_helpers.h>
 #include <bpf/bpf_endian.h>
@@ -309,8 +306,7 @@ Hubble.
 Quando um \textit{pod} não alcança um serviço, os comandos abaixo ajudam a localizar a
 camada com defeito. São \textbf{comandos de cluster}, não executados nesta máquina:
 
-\begin{lstlisting}[language=bash, caption={Listing 8.7 – Passos de depuração de conectividade em um cluster (não executado).}, label=lst:k8s-debug]
-# TODO: validar em um cluster Kubernetes
+\begin{lstlisting}[language=bash, caption={Passos de depuração de conectividade em um cluster (não executado).}, label=lst:k8s-debug]
 kubectl get svc,endpoints -n loja          # o servico tem backends?
 kubectl get pods -o wide -n loja           # em que no e IP estao os pods?
 kubectl exec -it POD -n loja -- nslookup db   # o DNS resolve o servico?

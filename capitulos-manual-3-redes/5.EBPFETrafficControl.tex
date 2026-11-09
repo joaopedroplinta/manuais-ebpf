@@ -33,7 +33,7 @@ IP (GREGG, 2019).
 A configuração do ponto de ancoragem \textit{ingress} utiliza a \textit{qdisc}
 \texttt{clsact}, que deve ser anexada à interface antes do carregamento do programa:
 
-\begin{lstlisting}[caption={Listing 5.1 – Configuração da qdisc clsact e anexação de programa eBPF no ingress.}, label=lst:tc-ingress-setup]
+\begin{lstlisting}[caption={Configuração da qdisc clsact e anexação de programa eBPF no ingress.}, label=lst:tc-ingress-setup]
 # Adicionar a qdisc clsact a interface eth0
 tc qdisc add dev eth0 clsact
 
@@ -46,7 +46,7 @@ O exemplo a seguir demonstra um classificador de entrada que acumula bytes receb
 por protocolo de camada 4 e registra eventos de novas conexões TCP em um mapa
 \texttt{BPF\_MAP\_TYPE\_RINGBUF} para exportação ao espaço de usuário:
 
-\begin{lstlisting}[caption={Listing 5.2 – Programa TC ingress que monitora bytes e novas conexões TCP.}, label=lst:tc-ingress-prog]
+\begin{lstlisting}[caption={Programa TC ingress que monitora bytes e novas conexões TCP.}, label=lst:tc-ingress-prog]
 #include <linux/bpf.h>
 #include <linux/pkt_cls.h>
 #include <linux/if_ether.h>
@@ -151,7 +151,7 @@ ou por função virtualizada de rede (CASSAGNES et al., 2020).
 A configuração do ponto de ancoragem \textit{egress} é análoga à do \textit{ingress},
 utilizando a mesma \textit{qdisc} \texttt{clsact} adicionada anteriormente:
 
-\begin{lstlisting}[caption={Listing 5.3 – Anexação de programa eBPF no egress TC.}, label=lst:tc-egress-setup]
+\begin{lstlisting}[caption={Anexação de programa eBPF no egress TC.}, label=lst:tc-egress-setup]
 tc filter add dev eth0 egress bpf da obj tc_monitor.o sec tc_egress
 \end{lstlisting}
 
@@ -160,7 +160,7 @@ transmissão por cgroup e impõe um limite máximo de bytes por segundo descarta
 pacotes excedentes — implementando uma forma simples de \textit{policing} de saída sem
 dependência de módulos externos:
 
-\begin{lstlisting}[caption={Listing 5.4 – Programa TC egress com monitoramento de bytes por cgroup.}, label=lst:tc-egress-prog]
+\begin{lstlisting}[caption={Programa TC egress com monitoramento de bytes por cgroup.}, label=lst:tc-egress-prog]
 #include <linux/bpf.h>
 #include <linux/pkt_cls.h>
 #include <bpf/bpf_helpers.h>
@@ -246,7 +246,7 @@ após qualquer modificação (Linux Kernel Documentation, 2024). O exemplo a seg
 demonstra a reescrita do campo DSCP (\textit{Differentiated Services Code Point}) do
 cabeçalho IP para marcar pacotes de um cgroup específico com alta prioridade:
 
-\begin{lstlisting}[caption={Listing 5.5 – Remarcação de DSCP para pacotes de cgroup prioritário.}, label=lst:tc-dscp]
+\begin{lstlisting}[caption={Remarcação de DSCP para pacotes de cgroup prioritário.}, label=lst:tc-dscp]
 #include <linux/bpf.h>
 #include <linux/pkt_cls.h>
 #include <linux/ip.h>
@@ -287,7 +287,7 @@ a flexibilidade de programas eBPF — que podem inspecionar qualquer campo do pa
 consultar mapas BPF com listas de classificação — com a maturidade dos mecanismos de
 enfileiramento existentes no TC (GREGG, 2019):
 
-\begin{lstlisting}[caption={Listing 5.6 – Classificação de pacotes por porta de destino para HTB.}, label=lst:tc-classify]
+\begin{lstlisting}[caption={Classificação de pacotes por porta de destino para HTB.}, label=lst:tc-classify]
 #include <linux/bpf.h>
 #include <linux/pkt_cls.h>
 #include <linux/ip.h>
