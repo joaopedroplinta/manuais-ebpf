@@ -95,11 +95,12 @@ cena $W/e.out 1 "cat /etc/shadow > /dev/null; cat /etc/passwd > /dev/null" opens
 tr -d '\000' < $W/e.out | grep -E "PID|/etc/(shadow|passwd)" | head -6
 grep -q "/etc/shadow" $W/e.out && ok "opensnoop viu /etc/shadow (root)" || nok "opensnoop viu /etc/shadow (root)"
 
-echo "== F. Manual 2, cap. 9: alerta de finit_module"
+echo "== F. Manual 2, cap. 9: alerta de finit_module e init_module (modprobe dummy, modulo .ko.zst)"
 modprobe -r dummy 2>/dev/null
 cena $W/f.out 1 "modprobe dummy" \
-  bpftrace -e 'tracepoint:syscalls:sys_enter_finit_module { printf("[ALERTA] %s (pid=%d uid=%d) carregou um modulo\n", comm, pid, uid); }'
+  bpftrace -e 'tracepoint:syscalls:sys_enter_finit_module { printf("[ALERTA finit_module] %s (pid=%d uid=%d)\n", comm, pid, uid); }
+               tracepoint:syscalls:sys_enter_init_module  { printf("[ALERTA init_module] %s (pid=%d uid=%d)\n", comm, pid, uid); }'
 tr -d '\000' < $W/f.out | grep -E "Attached|ALERTA" | head -4
-grep -q ALERTA $W/f.out && ok "alerta de finit_module" || nok "alerta de finit_module"
+grep -q "ALERTA" $W/f.out && ok "alerta de carga de modulo (finit_module ou init_module)" || nok "alerta de carga de modulo"
 
 echo "== RESUMO: $pass PASS, $fail FAIL"

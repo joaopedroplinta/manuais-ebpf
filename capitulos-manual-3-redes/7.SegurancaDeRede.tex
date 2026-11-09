@@ -17,9 +17,12 @@ dependem de carregar o programa no kernel, o que exige \textit{root}. O filtro X
 \texttt{fw\_xdp} foi carregado e testado pelo script
 \texttt{testes/09-redes-exemplos.sh} (capítulo \ref{cap:exemplos-redes}): o \texttt{ping}
 passou com a lista de bloqueio vazia, foi bloqueado ao inserir a origem e voltou ao
-remover a regra. O firewall de saída em TC e o limitador de SYN foram apenas
-compilados, e seus blocos trazem a marca \texttt{TODO: validar com sudo} no
-código-fonte do capítulo.
+remover a regra. O firewall de saída em TC foi carregado no \texttt{veth-pod} pelo
+script \texttt{testes/10-pendencias.sh}: o verificador o aceitou, ele bloqueou o
+\texttt{curl} para a porta 8099 (o contador da regra chegou a 5) e o tráfego voltou ao
+remover a regra. O limitador de SYN teve apenas o carregamento aceito pelo
+verificador, sem tráfego de teste, e o bloco de contagem de \textit{sockets} em
+\texttt{SYN\_RECV} ainda traz a marca \texttt{TODO: validar com sudo} no código-fonte.
 
 % ----------------------------------------------------------------
 \section{Filtragem de pacotes}
@@ -282,7 +285,6 @@ A anexação usa a \textit{qdisc} \texttt{clsact}, como no Listing
 partir de versões recentes do iproute2; em versões antigas, informe a seção
 explicitamente com \texttt{sec tc}.
 
-% TODO: validar com sudo
 \begin{lstlisting}[language=bash, caption={Anexação do firewall de saída e inclusão de uma regra.}, label=lst:seg-tc-attach]
 sudo tc qdisc add dev eth0 clsact
 sudo tc filter add dev eth0 egress bpf da obj tc_egress_fw.bpf.o sec tc

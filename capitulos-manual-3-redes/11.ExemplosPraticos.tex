@@ -12,9 +12,9 @@ rede externa, montado com um \textit{network namespace} e um par \texttt{veth}
 \texttt{testes/09-redes-exemplos.sh} em Ubuntu 26.04 com kernel 7.0, em um laboratório
 com \textit{network namespace} e par \texttt{veth}. O script terminou com 17 testes
 aprovados e nenhum reprovado, e sua saída está em
-\texttt{testes/resultados/09-redes-exemplos.txt}. Os blocos que ainda não foram
-executados (o histograma de tamanhos de pacote e a perda artificial com
-\texttt{netem}) trazem a marca \texttt{TODO: validar com sudo} no código-fonte.
+\texttt{testes/resultados/09-redes-exemplos.txt}. O histograma de tamanhos de pacote e a perda artificial com
+\texttt{netem} foram executados pelo script \texttt{testes/10-pendencias.sh}, com a
+saída em \texttt{testes/resultados/10-pendencias.txt}.
 
 \textbf{Preparação do laboratório.} O laboratório é o do Listing \ref{lst:k8s-veth}: o
 \textit{namespace} \texttt{pod1} (endereço \texttt{10.200.0.2}) faz o papel de um
@@ -116,7 +116,6 @@ pacotes, sem escrever C, use o \textit{tracepoint} genérico (Listing
 \ref{lst:ferr-bpftrace}). Aqui, o interesse é o formato do resultado, um histograma em
 potências de dois:
 
-% TODO: validar com sudo
 \begin{lstlisting}[language=bash, caption={Histograma de tamanho de pacotes na veth-host.}, label=lst:ex-pkt-hist]
 sudo bpftrace -e 'tracepoint:net:netif_receive_skb /str(args->name) == "veth-host"/ { @len = hist(args->len); }'
 \end{lstlisting}
@@ -180,7 +179,6 @@ suspeito. Em um laboratório, é possível provocá-las com perda artificial de 
 usando o \texttt{tc netem} no \textit{namespace}, e observá-las com o
 \textit{tracepoint} \texttt{tcp\_retransmit\_skb}:
 
-% TODO: validar com sudo
 \begin{lstlisting}[language=bash, caption={Provocação e observação de retransmissões.}, label=lst:ex-retrans]
 sudo ip netns exec pod1 tc qdisc add dev veth-pod root netem loss 20%
 sudo bpftrace -e 'tracepoint:tcp:tcp_retransmit_skb {
@@ -195,9 +193,10 @@ exemplo, \texttt{python3 -m http.server 8099 --bind 10.200.0.1}), e não só em
 \texttt{127.0.0.1}. O \texttt{netem} exige o módulo \texttt{sch\_netem} no kernel, que
 pode estar ausente em configurações mínimas. A expectativa é ver linhas de
 retransmissão com as portas da conexão; o número exato é aleatório, e o campo
-\texttt{comm} pode mostrar um contexto do kernel (como \texttt{ksoftirqd}) em vez de
-\texttt{curl}, pois as retransmissões por temporizador ocorrem fora do contexto do
-processo.
+\texttt{comm} pode mostrar um contexto do kernel em vez de \texttt{curl}, pois as
+retransmissões por temporizador ocorrem fora do contexto do processo. No teste, a
+retransmissão apareceu com \texttt{comm} igual a \texttt{swapper/7}, a tarefa ociosa da
+CPU 7.
 
 % ----------------------------------------------------------------
 \section{Filtragem de tráfego}
