@@ -24,6 +24,7 @@ Cada comando roda por poucos segundos e é encerrado com `SIGINT`. Os scripts cr
 | `04-ebpf-exporter-prometheus-grafana.sh` | `apt` em contêiner limpo, `ebpf_exporter`, Prometheus, Grafana | 2, 5, 7 | `docker`, internet |
 | `05-usdt-python.sh` | sondas USDT do `python3.14` | 6 | — |
 | `06-painel-grafana.sh` | sobe o painel de exemplo para tirar print; repete o USDT | 6, 7 | arquivos dos scripts 03 e 04 em `/tmp` |
+| `07-exemplos-praticos.sh` | cenários do cap. 8: `execsnoop`, `opensnoop -p`, `syscount -p`, `tcplife`, USDT | 8 | `libbpf-tools`, `curl`, `python3.14` |
 
 ## Resultados
 
