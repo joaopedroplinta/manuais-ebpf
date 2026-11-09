@@ -1,0 +1,17 @@
+== 1a. execsnoop-bpfcc
+In file included from /virtual/main.c:16:
+include/linux/fs.h:2428:2: warning: declaration does not declare anything [-Wmissing-declarations]
+ 2428 |         struct __filename_head;
+      |         ^~~~~~~~~~~~~~~~~~~~~~
+include/linux/fs.h:2432:15: error: static assertion failed due to requirement 'sizeof(struct filename) % 64 == 0': sizeof(struct filename) % 64 == 0
+ 2432 | static_assert(sizeof(struct filename) % 64 == 0);
+      |               ^~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+include/linux/build_bug.h:79:50: note: expanded from macro 'static_assert'
+   79 | #define static_assert(expr, ...) __static_assert(expr, ##__VA_ARGS__, #expr)
+      |                                                  ^~~~
+include/linux/build_bug.h:80:56: note: expanded from macro '__static_assert'
+   80 | #define __static_assert(expr, msg, ...) _Static_assert(expr, msg)
+      |                                                        ^~~~
+include/linux/fs.h:2432:44: note: expression evaluates to '40 == 0'
+ 2432 | static_assert(sizeof(struct filename) % 64 == 0);
+== 1b. opensnoop-bpfcc filtrando /etc/shadow e /etc/passwd

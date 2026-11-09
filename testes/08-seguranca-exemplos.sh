@@ -16,11 +16,11 @@ run() {
   head -15 /tmp/m2-ex.out
 }
 
-echo "== 1a. execsnoop-bpfcc"
-run 8 "execsnoop-bpfcc" -- "sudo -u $U ls / >/dev/null; sudo -u $U id >/dev/null"
+echo "== 1a. execsnoop-libbpf"
+run 8 "execsnoop-libbpf" -- "sudo -u $U ls / >/dev/null; sudo -u $U id >/dev/null"
 
-echo "== 1b. opensnoop-bpfcc filtrando /etc/shadow e /etc/passwd"
-run 8 "opensnoop-bpfcc | grep --line-buffered -E '/etc/(shadow|passwd)'" -- "sudo -u $U cat /etc/shadow /etc/passwd >/dev/null 2>&1"
+echo "== 1b. opensnoop-libbpf filtrando /etc/shadow e /etc/passwd"
+run 8 "opensnoop-libbpf | grep --line-buffered -E '/etc/(shadow|passwd)'" -- "sudo -u $U cat /etc/shadow /etc/passwd >/dev/null 2>&1"
 
 echo "== 1c. shadow.bt"
 cat > /tmp/shadow.bt <<'BT'
@@ -54,8 +54,8 @@ fi
 echo "== 2c. finit_module (so o alerta; nenhum modulo e carregado)"
 run 6 "bpftrace -e 'tracepoint:syscalls:sys_enter_finit_module { printf(\"[ALERTA] %s (pid=%d uid=%d) carregou um modulo\\n\", comm, pid, uid); }'" -- "sleep 1"
 
-echo "== 3a. tcpconnect-bpfcc"
-run 8 "tcpconnect-bpfcc" -- "sudo -u $U bash -c 'exec 3<>/dev/tcp/127.0.0.1/22' 2>&1"
+echo "== 3a. tcpconnect-libbpf"
+run 8 "tcpconnect-libbpf" -- "sudo -u $U bash -c 'exec 3<>/dev/tcp/127.0.0.1/22' 2>&1"
 
 echo "== 3b. sys_enter_connect com bpftrace"
 run 8 "bpftrace -e 'tracepoint:syscalls:sys_enter_connect { printf(\"%s (pid=%d uid=%d) chamou connect()\\n\", comm, pid, uid); }'" -- "sudo -u $U bash -c 'exec 3<>/dev/tcp/127.0.0.1/22' 2>&1"

@@ -7,8 +7,10 @@ com as técnicas de detecção do Capítulo~\ref{cap:deteccao}. Cada cenário pa
 uma pergunta de segurança, mostra os comandos para respondê-la e indica como
 interpretar o resultado. Todos os comandos exigem \texttt{root} e foram pensados
 para uma máquina de laboratório, nunca para um sistema em produção sem
-autorização. Os nomes das ferramentas BCC seguem o sufixo \texttt{-bpfcc} usado
-pelos pacotes do Ubuntu; em outras distribuições, o sufixo pode não existir.
+autorização. As ferramentas prontas são as do pacote \texttt{libbpf-tools}, que no Ubuntu
+têm o sufixo \texttt{-libbpf}. As versões do BCC (\texttt{-bpfcc}) falharam ao
+compilar no kernel 7.0 usado nos testes, com \texttt{static assertion failed}
+em \texttt{include/linux/fs.h}, e por isso não são usadas aqui.
 
 % ----------------------------------------------------------------
 \section{Monitoramento de processos e arquivos}
@@ -24,7 +26,7 @@ comandos quaisquer e veja-os aparecer.
 
 % TODO: validar com sudo
 \begin{lstlisting}[language=bash, caption={Execuções de processos com o \texttt{execsnoop} do BCC.}]
-sudo execsnoop-bpfcc
+sudo execsnoop-libbpf
 \end{lstlisting}
 
 Para os arquivos, o \texttt{opensnoop} lista cada abertura. Como a saída é
@@ -32,7 +34,7 @@ volumosa, filtre pelos caminhos sensíveis:
 
 % TODO: validar com sudo
 \begin{lstlisting}[language=bash, caption={Aberturas de arquivos sensíveis com o \texttt{opensnoop}.}]
-sudo opensnoop-bpfcc | grep --line-buffered -E '/etc/(shadow|passwd)'
+sudo opensnoop-libbpf | grep --line-buffered -E '/etc/(shadow|passwd)'
 \end{lstlisting}
 
 Se o objetivo é alertar apenas sobre um arquivo específico, um programa bpftrace
@@ -137,7 +139,7 @@ endereço e porta de destino:
 
 % TODO: validar com sudo
 \begin{lstlisting}[language=bash, caption={Conexões TCP de saída com o \texttt{tcpconnect}.}]
-sudo tcpconnect-bpfcc
+sudo tcpconnect-libbpf
 \end{lstlisting}
 
 Em outro terminal, gere uma conexão para observar o registro. O exemplo usa o
