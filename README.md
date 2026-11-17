@@ -13,7 +13,17 @@ Manuais do projeto de extensão do minicurso **Introdução ao eBPF**, desenvolv
 | 2 | eBPF para Segurança | `main-manual-2-seguranca.tex` | `capitulos-manual-2-seguranca/` (11) |
 | 3 | eBPF para Redes | `main-manual-3-redes.tex` | `capitulos-manual-3-redes/` (12) |
 
-Cada manual é compilado separadamente e gera seu próprio PDF, com capa, folha de rosto e sumário. Os três manuais têm todos os capítulos escritos. Os exemplos foram executados e registrados em `testes/` (scripts `01` a `09`, com a saída em `testes/resultados/`); os capítulos de Kubernetes e Cilium do Manual 3 são conceituais, e os trechos ainda sem execução estão marcados com `TODO: validar com sudo` no código-fonte.
+Cada manual é compilado separadamente e gera seu próprio PDF, com capa, folha de rosto e sumário. Os três manuais têm todos os capítulos escritos.
+
+## Validação dos exemplos
+
+Os exemplos foram executados em Ubuntu 26.04 com kernel 7.0. Os scripts `01` a `10` em `testes/` repetem os comandos dos capítulos, e a saída de cada execução está em `testes/resultados/` (ver `testes/README.md`). Em outro kernel ou distribuição, os resultados podem variar.
+
+Limitações declaradas nos próprios manuais:
+
+- **Manual 2:** `opensnoop` e o alerta de `finit_module` não capturaram os eventos de teste, e a causa não foi investigada.
+- **Manual 3:** os capítulos 8 e 9 (Kubernetes e Cilium) são conceituais, pois não havia cluster disponível. O limitador de SYN (`syn_guard`) só teve o carregamento aceito pelo verificador.
+- **BCC:** as ferramentas `-bpfcc` falharam ao compilar no kernel 7.0, então os exemplos usam as versões `-libbpf` e `bpftrace`.
 
 ## Estrutura
 
