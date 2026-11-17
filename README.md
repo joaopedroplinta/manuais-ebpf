@@ -7,11 +7,11 @@ Manuais do projeto de extensão do minicurso **Introdução ao eBPF**, desenvolv
 
 ## Manuais
 
-| Manual | Tema | Main | Capítulos |
-| --- | --- | --- | --- |
-| 1 | eBPF para Observabilidade | `main-manual-1-observabilidade.tex` | `capitulos-manual-1-observabilidade/` (10) |
-| 2 | eBPF para Segurança | `main-manual-2-seguranca.tex` | `capitulos-manual-2-seguranca/` (11) |
-| 3 | eBPF para Redes | `main-manual-3-redes.tex` | `capitulos-manual-3-redes/` (12) |
+| Manual | Tema | PDF | Main | Capítulos |
+| --- | --- | --- | --- | --- |
+| 1 | eBPF para Observabilidade | [PDF](capitulos-manual-1-observabilidade/manual-1-observabilidade.pdf) | `main-manual-1-observabilidade.tex` | `capitulos-manual-1-observabilidade/` (10) |
+| 2 | eBPF para Segurança | [PDF](capitulos-manual-2-seguranca/manual-2-seguranca.pdf) | `main-manual-2-seguranca.tex` | `capitulos-manual-2-seguranca/` (11) |
+| 3 | eBPF para Redes | [PDF](capitulos-manual-3-redes/manual-3-redes.pdf) | `main-manual-3-redes.tex` | `capitulos-manual-3-redes/` (12) |
 
 Cada manual é compilado separadamente e gera seu próprio PDF, com capa, folha de rosto e sumário. Os três manuais têm todos os capítulos escritos.
 
